@@ -147,8 +147,18 @@ Lo que sí controla el emulador son ~42 ms (colchón del búfer + período del
 callback).
 
 **El emulador se cierra solo al lanzarlo desde un script.** No es un fallo: el
-shell mata el grupo de procesos al terminar la llamada. Para pruebas que
-debeban sobrevivir, lanzarlo desacoplado (ver `docs/PROCEDIMIENTOS.md` §8).
+shell mata el grupo de procesos al terminar la llamada. Si lo lanzas con
+`./emulador.exe ... &` desde una llamada de terminal o desde un script, el
+proceso desaparece al acabar esa llamada, sin ningún mensaje de error.
+
+Para probarlo automáticamente, lanzarlo desacoplado:
+
+```bash
+powershell -Command "Start-Process -FilePath '.\emulador.exe' -ArgumentList \
+  'rom/monitor.bin','4000','tarjeta.img','--debug' -WindowStyle Normal"
+```
+
+Desde `run.sh` / `run_debug.sh` en una terminal normal no ocurre.
 
 ---
 

@@ -235,6 +235,20 @@ posiciones de tiles.
 | `rom_get_micros()` devuelve 16 de 32 bits | ROM del monitor | Arreglar en `monitor_6502_TN-9k_16k` |
 | Fila 239 repetida en las últimas 240 líneas | `video_core.vhd` | Defecto del VHDL; el emulador no lo replica |
 
+## Sobre las "caídas" del emulador
+
+Durante la campaña se reportaron caídas del emulador. **No eran caídas:** el
+proceso moría porque se lanzaba desde una llamada de terminal con `( ... & )`, y
+el shell mata el grupo de procesos al terminar. La conexión daba
+`ConnectionResetError` y parecía un crash.
+
+Comprobado lanzándolo desacoplado (`Start-Process` o `run_debug.sh` desde una
+terminal real): **sobrevive indefinidamente**, incluso con el juego cargado y
+recibiendo peticiones HTTP.
+
+Si el emulador desaparece, **antes de investigar**: lanzarlo desacoplado y ver si
+sigue ocurriendo. Detalle en `PROCEDIMIENTOS.md` §8.
+
 ## 7. Segundo bug (sin corregir): la captura mezcla la VRAM de dos instantes
 
 Tras el parche de scroll, probado otra vez con River Raid: **sigue igual y en el

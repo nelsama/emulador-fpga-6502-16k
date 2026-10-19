@@ -381,10 +381,64 @@ consigo mismo.
 
 ### Confundir el cierre del proceso con un crash del emulador
 
-Ver arriba: lanzar con `(... &)` desde una llamada de terminal hace que el shell
-mate el grupo de procesos al terminar. Parece un crash (el proceso desaparece,
-la conexión da `ConnectionResetError`), pero no lo es. Lanzarlo desacoplado con
-`Start-Process` antes de investigar.
+**El síntoma:** lanzas el emulador desde una llamada de terminal, funciona, y en
+la llamada siguiente ya no está. La conexión da `ConnectionResetError` o
+`ConnectionRefusedError`, y el log **no contiene ningún error**.
+
+**La causa:** el shell mata el grupo de procesos al terminar la llamada. No es
+un fallo del emulador.
+
+**Por qué es tan engañoso:** durante la llamada en que lo lanzas, el proceso
+está vivo y responde. Todo parece correcto hasta que vuelves a mirar.
+
+| Forma de lanzarlo | Sobrevive a la llamada |
+|---|---|
+| `(./emulador.exe ... &)` | **No** |
+| `./emulador.exe ... &` (sin paréntesis) | No |
+| `Start-Process` (PowerShell) | **Sí** |
+| `run.sh` desde una terminal real | Sí |
+
+Verificado en este proyecto: con `( & )`, el proceso está vivo a los 6 s pero
+**desaparece en la llamada siguiente**. Con `Start-Process`, sobrevive a cargar
+el Pacman y a varias peticiones HTTP.
+
+**Cómo distinguirlo de un crash real:**
+
+| Señal | Cierre del shell | Crash del emulador |
+|---|---|---|
+| Log de error | vacío | traza, excepción o mensaje |
+| Hilo de audio | normal | puede morir en el callback |
+| Patrón | muere **entre** llamadas | muere a los N segundos |
+| `SDL_AUDIODRIVER=dummy` | no cambia nada | puede evitarlo |
+
+**Regla:** antes de investigar un "crash", lanzarlo desacoplado:
+
+```bash
+powershell -Command "Start-Process -FilePath '.\emulador.exe' -ArgumentList \
+  'rom/monitor.bin','4000','tarjeta.img','--debug' \
+  -RedirectStandardOutput '.tmp\out.log' -RedirectStandardError '.tmp\err.log' \
+  -WindowStyle Normal"
+```
+
+Solo si **entonces** también muere, hay un bug que investigar.
+
+### Dos diagnósticos erróneos que provocó (para no repetirlos)
+
+Este caso costó dos rondas de investigación equivocada. Los errores concretos:
+
+**Error 1: confundir el patrón con un crash del audio.** Al morir el proceso, y
+haber visto que con `SDL_AUDIODRIVER=dummy` otras ejecuciones sobrevivían, se
+concluyó que el dispositivo virtual (Steam Streaming Speakers) tumbaba el
+emulador. Era una correlación sin relación: en las pruebas con `dummy` el patrón
+de arranque que se usó era distinto.
+
+**Error 2: dar por reproducido un bug sin comprobar la versión.** Se comparó el
+binario actual con el del commit anterior para decidir si el bug era nuevo, pero
+ambos se lanzaron con el mismo patrón defectuoso: los dos "fallaron" y se
+concluyó que el bug era antiguo.
+
+**Lo que faltaba en ambos casos:** lanzar desacoplado **primero**. Una vez hecho,
+el bug simplemente no existía.
 
 ---
 
