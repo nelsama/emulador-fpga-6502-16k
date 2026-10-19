@@ -92,6 +92,30 @@ private:
   // Paletas: 32 entradas × 12 bits (RGB444)
   std::array<uint16_t, 32> pal_{};
 
+  // --- Instantánea para render() ---------------------------------------
+  //
+  // render() recorre la pantalla leyendo la VRAM. La CPU sigue ejecutándose
+  // entre vuelta y vuelta del bucle principal, así que si escribe mientras se
+  // pinta, unas filas salen con el estado viejo y otras con el nuevo: el frame
+  // no es coherente consigo mismo (GAME OVER dibujado dos veces, textos
+  // partidos, etc.).
+  //
+  // Se copia todo lo que se necesita AL ENTRAR en render() y se pinta solo de
+  // la copia. El frame queda consistente aunque la CPU siga escribiendo.
+  struct Snapshot {
+    std::array<uint8_t, 2048> tilemap;
+    std::array<uint8_t, 2048> attrib;
+    std::array<uint8_t, 256 * 8 * 2> fgpat;
+    std::array<uint8_t, 64 * 8 * 2> sppat;
+    std::array<uint8_t, 160> oam;
+    std::array<uint16_t, 32> pal;
+    int scroll_x, scroll_y;
+    int band2_x, band2_y, band3_x, band3_y;
+    uint8_t raster0, raster1;
+  };
+  Snapshot snap_{};
+  void take_snapshot();
+
   // Plano 0 retenido al escribir la fila (ver manual §2.2)
   uint8_t pending_plane0_ = 0;
   bool    plane0_valid_ = false;
@@ -100,6 +124,7 @@ private:
   void write_vram(uint8_t lo, uint8_t hi, uint8_t data);
   void default_palette();
   uint16_t pal_index(int area, uint8_t attrib_byte, uint8_t color) const;
+  // Funciones de color sobre una paleta dada (no sobre pal_).
   uint32_t rgb444_to_rgba(uint16_t rgb444) const;
   void load_default_font();
   void render_tile_row(uint32_t* out, int band, int src_y, int scroll_x, int scroll_y);

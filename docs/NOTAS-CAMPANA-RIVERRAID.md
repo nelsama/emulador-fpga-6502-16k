@@ -127,26 +127,45 @@ Medido tras los arreglos, con `localhost`:
 
 ---
 
-## 4. Franjas del tilemap sin actualizar ✅ CONFIRMADO (por diseño)
+## 4. Franjas del tilemap sin actualizar ✅ CONFIRMADO — **corregido**
 
-**Síntoma:** en River Raid se veían franjas con contenido del frame anterior.
+**Síntoma:** en River Raid se veían franjas con contenido del frame anterior, y
+el panel de GAME OVER aparecía duplicado o partido.
 
-**Causa:** el emulador **renderiza el frame completo en una sola pasada**, con el
-estado de la VRAM en ese instante (`Video::render()`). No simula el barrido
-línea a línea.
+**Causa real (más precisa que la de la nota original):** no era que el emulador
+no simulara el barrido, sino que **`Video::render()` leía la VRAM viva mientras la
+CPU seguía escribiendo en ella**.
 
-En el hardware real el raster recorre la pantalla mientras la CPU escribe. Lo que
-la CPU escribe **después** de que el raster pasó por esa zona no se ve hasta el
-frame siguiente, y eso produce exactamente esas franjas mezcladas.
+El render recorre la pantalla de arriba abajo (~7 ms, con la CPU corriendo en
+paralelo a 3.375 MHz). Si el programa escribía a mitad del recorrido:
 
-**No es un error del programa:** el juego gasta ~7 ms por frame (muy por encima
-de los 1,43 ms de VBLANK) y el propio `demo_scroll_v64.asm` tiene el mismo
-efecto.
+- las filas ya pintadas usaban el tilemap viejo,
+- las de abajo el nuevo,
+- y como el scroll también se leía en vivo, la misma fila de mundo se resolvía
+  con dos `scroll_y` distintos.
 
-**Es una limitación conocida del emulador.** Reproducirlo exigiría renderizar por
-líneas con "instantáneas" de la VRAM, lo que multiplicaría el coste. Si en el
-futuro se necesita para depurar *tearing*, la vía sería guardar una copia de la
-VRAM por línea de barrido.
+De ahí que el panel apareciera dos veces separado ~180 px, y que en la prueba de
+pantalla completa la imagen saliera azul lisa aunque `/vram.json` mostrara los
+datos correctos: **el frame no era coherente consigo mismo**.
+
+**Corregido:** `render()` toma ahora una instantánea al entrar (`take_snapshot()`)
+con `tilemap_`, `attrib_`, `fgpat_`, `sppat_`, `oam_`, `pal_` y los registros de
+scroll/raster, y pinta **exclusivamente** de esa copia.
+
+```cpp
+void Video::render(uint32_t* out) {
+  take_snapshot();          // una sola lectura consistente
+  const Snapshot& s = snap_;
+  // ... todo el bucle lee de s, nunca de tilemap_/pal_/oam_
+}
+```
+
+Coste: despreciable (~16 KB de copia por frame).
+
+**Lo que NO cambia:** el emulador sigue sin simular el barrido línea a línea.
+Sigue sin reproducir el *tearing* real del hardware (lo que la CPU escribe tras
+el paso del raster se ve en el frame siguiente). Eso es otro trabajo; lo
+corregido es la incoherencia **interna** de cada frame.
 
 ---
 
@@ -198,13 +217,14 @@ posiciones de tiles.
 | `rom_get_micros()` | Devuelve 16 bits. Usar el latch del timer directo. **Bug de la ROM**, no del emulador. |
 | Velocidad de CPU y frames | Fiel al hardware (3.375 MHz, 59,94 Hz) |
 | HTTP | No congela la emulación; `scale` funciona. Latencia real ~20 ms. |
-| Franjas mezcladas | Esperado: el emulador no simula el barrido línea a línea |
+| Franjas mezcladas | **Corregido**: el frame es coherente (instantánea al renderizar). Sigue sin reproducir el *tearing* del hardware. |
 | Imagen repetida en HDMI | Defecto del VHDL; el emulador no lo replica |
 
 ## Bugs del emulador encontrados en esta revisión
 
 | Bug | Efecto | Estado |
 |---|---|---|
+| **`render()` leía la VRAM viva** | Un frame mezclaba dos estados: GAME OVER duplicado, franjas, imagen azul con datos correctos | **Corregido**: instantánea al entrar |
 | Interbloqueo al cerrar la conexión HTTP | Cada petición tardaba segundos o quedaba colgada | **Corregido** |
 | Solo escuchaba en IPv4; `localhost` resuelve a IPv6 | 2 s de espera por petición | **Corregido** |
 
@@ -214,3 +234,46 @@ posiciones de tiles.
 |---|---|---|
 | `rom_get_micros()` devuelve 16 de 32 bits | ROM del monitor | Arreglar en `monitor_6502_TN-9k_16k` |
 | Fila 239 repetida en las últimas 240 líneas | `video_core.vhd` | Defecto del VHDL; el emulador no lo replica |
+
+## 7. Segundo bug (sin corregir): la captura mezcla la VRAM de dos instantes
+
+Tras el parche de scroll, probado otra vez con River Raid: **sigue igual y en el
+GAME OVER es mas evidente**.
+
+Que se ve (captura de `/screen.png`, 320x240):
+
+- banda de ~40 px arriba con el texto del GAME OVER ("FIRE/R = reintentar",
+  "Q = salir") sobre el rio, y una franja verde encima;
+- el panel negro del GAME OVER cortado a la mitad, la otra mitad abajo;
+- en partida normal, el HUD no cuadra con el cauce.
+
+Un panel escrito en las filas 11-16 del tilemap aparece en DOS zonas separadas
+~180 lineas. Un solo buffer con scroll normal no produce eso: la captura esta
+mezclando contenido de instantes distintos mientras recorre el mapa.
+
+Sospechas para quien lo arregle (todo en `src/video/video.cpp`, `render()`):
+
+1. **Lectura no atomica de la VRAM**: el tilemap y los atributos se leen celda
+   a celda dentro del bucle de pixeles. Si mientras se pinta el CPU escribe
+   (o si el hilo del emulador avanza), el mismo frame mezcla dos estados.
+   Copiar `tilemap_`, `attrib_` y `oam_` a un buffer local al principio de
+   `render()` y pintar desde la copia.
+2. **Bandas de raster**: con `raster0_`/`raster1_` cada banda usa scroll y
+   region distintas. En River Raid se fijan a `0xFF` (sin bandas), asi que si
+   aun asi se cambia de banda, la condicion de cambio esta mal. Recordar que
+   en el VHDL la banda MEDIA es la que usa el scroll global
+   (`sc_x_in/sc_y_in`) y las bandas 0/2 usan `band2_*`/`band3_*`.
+3. **Estado estatico entre frames**: comprobar que el parche de scroll no
+   deja acumuladores `static` (linea/linea anterior) que se arrastren de una
+   captura a otra: eso explicaria el salto de ~180 lineas (un panel que se
+   pinta a mitad de frame se "veria" partido segun cuando llega la peticion).
+
+Forma de comprobarlo sin el juego: pintar un patron de una sola fila
+horizontal distinta por cada fila del tilemap (32 colores/filas) y capturar con
+el CPU detenido. Si una fila sale dos veces o en posicion equivocada, es
+lectura no atomica o mezcla de bandas, no el juego.
+
+Nota de metodo: la captura vigente sale a 320x240 (el `?scale=` sigue sin
+efecto) y el menu de GAME OVER solo se pinta una vez, asi que la captura puede
+venir de un frame viejo; para diagnosticar hay que parar el core o leer
+`/vram.json` y `/screen.png` en la misma peticion.

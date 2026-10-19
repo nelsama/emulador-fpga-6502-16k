@@ -356,6 +356,36 @@ Si `cpu`, `aud`, `poll` y `dibujo` suman 5 ms y la vuelta dura 90 ms, el tiempo
 se pierde **fuera** del proceso. Mirar saturación de CPU, otros procesos y el
 planificador.
 
+### Leer estado vivo en un render que tarda varios milisegundos
+
+`Video::render()` recorre la pantalla de arriba abajo mientras la CPU sigue
+ejecutándose. Si lee la VRAM directamente (`tilemap_[cell]`, `pal_[i]`) y el
+programa escribe a mitad del recorrido, **el frame mezcla dos estados**: unas
+filas viejas y otras nuevas.
+
+Síntomas que provoca, y que se confunden con otros fallos:
+
+- un panel dibujado "dos veces" en zonas separadas (el mismo texto con dos
+  scroll distintos);
+- texto partido o franjas a media altura;
+- una imagen que no coincide con `/vram.json`, aunque los datos guardados sean
+  correctos.
+
+**Regla:** todo lo que el render necesite se copia a una instantánea **al
+entrar**, y se pinta solo de la copia. Vale para VRAM, paletas, OAM y registros
+de scroll/raster. El coste en este proyecto es despreciable (~16 KB por frame).
+
+La alternativa (simular el barrido línea a línea) reproduce incluso el *tearing*
+real, pero multiplica el coste y no hace falta para que el frame sea coherente
+consigo mismo.
+
+### Confundir el cierre del proceso con un crash del emulador
+
+Ver arriba: lanzar con `(... &)` desde una llamada de terminal hace que el shell
+mate el grupo de procesos al terminar. Parece un crash (el proceso desaparece,
+la conexión da `ConnectionResetError`), pero no lo es. Lanzarlo desacoplado con
+`Start-Process` antes de investigar.
+
 ---
 
 ## 9. Plantilla de verificación rápida
