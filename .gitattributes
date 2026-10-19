@@ -1,0 +1,17 @@
+# Normalización de finales de línea.
+#
+# IMPORTANTE: los .sh DEBEN conservar LF. Si git los convierte a CRLF (por el
+# core.autocrlf de Windows) fallan al ejecutarse en Linux/WSL con
+# "/bin/bash^M: bad interpreter".
+#
+# Los .bat de Windows necesitan CRLF.
+* text=auto eol=lf
+
+*.sh   text eol=lf
+*.bat  text eol=crlf
+*.cmd  text eol=crlf
+
+*.png  binary
+*.bin  binary
+*.img  binary
+*.sid  binary

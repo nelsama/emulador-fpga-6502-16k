@@ -1,0 +1,37 @@
+# --- Compilación ---------------------------------------------------------
+build/
+*.o
+*.d
+*.exe
+*.a
+*.cache/
+compile_commands.json
+
+# --- Binarios y DLLs copiados por el Makefile ----------------------------
+# No se versionan: se obtienen compilando o copiando desde MSYS2.
+*.dll
+
+# --- Ficheros temporales y de diagnóstico --------------------------------
+.tmp/
+*.log
+*.wav
+*.ppm
+*.png.bak
+
+# --- Imagen de la tarjeta SD ---------------------------------------------
+# 16 MB y se regenera con tools/sd_tool.py. Se versiona su contenido
+# (pacman, sidplayer, etc.) como ficheros sueltos, no la imagen.
+tarjeta.img
+*.img
+
+# --- Dependencias grandes no usadas --------------------------------------
+# libsidplayfp fue una prueba que no se usa (reSIDfp está en
+# third_party/residfp). Tiene su propio .git y pesa 46 MB.
+third_party/libsidplayfp/
+
+# --- Editores y sistema --------------------------------------------------
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
