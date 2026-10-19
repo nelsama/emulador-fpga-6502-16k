@@ -68,6 +68,17 @@ Servidor HTTP que se activa con el lanzador **`run_debug.sh`** (o con
 
 En Windows: `run_debug.bat` (y `run.bat` sin depuración).
 
+Si vas a automatizar con un agente o un script, hay un ayudante que lanza el
+emulador desacoplado y espera a que responda:
+
+```bash
+python tools/emu_agent.py start       # arranca y espera
+python tools/emu_agent.py load PACMAN.BIN 0800
+python tools/emu_agent.py run 0800
+python tools/emu_agent.py screenshot pantalla.png
+python tools/emu_agent.py stop
+```
+
 | URL | Contenido |
 |---|---|
 | `/` | Vista previa del vídeo + estado, refresco automático |
@@ -198,7 +209,7 @@ src/
   debug_dump.*         PNG/PPM/JSON/texto y volcado de RAM
   video/               motor del Core de Vídeo
 third_party/residfp/   núcleo SID de VICE (GPL v2+)
-tools/                 gen_font, extract_rom, sd_tool, diag_rx, crear_sd.sh
+tools/                 gen_font, extract_rom, sd_tool, diag_rx, crear_sd.sh, emu_agent.py
 rom/monitor.bin        ROM del monitor v2.6.2
 sdcard/                contenido de la SD (la imagen se regenera con tools/crear_sd.sh)
 run.sh / run.bat             lanzadores (sin depuracion)

@@ -215,26 +215,149 @@ curl -o zp.bin "http://localhost:8080/ram.bin?start=0&len=256"
 
 ### Uso desde un agente de IA
 
-Este es el flujo previsto cuando se depura software con ayuda de una IA:
+Guía práctica para automatizar con el emulador. **El primer punto es el más
+importante**: si se ignora, el emulador parece "caerse".
 
-1. La IA lanza el emulador (`./run.sh`).
-2. Conecta al UART por TCP y carga el programa con el monitor
-   (`load juego.bin 0800`, `r 0800`).
-3. Espera un poco y **descarga `/screen.png`**: ve exactamente lo que aparecería
-   en el monitor.
-4. Si la imagen no cuadra, consulta `/vram.json` (qué tiles y sprites debería
-   haber) y `/state.txt` (si el programa está escribiendo en el vídeo, si los
-   LEDs cambian, si el SID tiene registros puestos).
-5. Repite con `?scale=2` cuando necesite leer texto de 8×8 píxeles.
+#### 1. Lanzarlo desacoplado (obligatorio)
 
-Ejemplo mínimo en Python:
+Un agente suele ejecutar cada comando en una llamada distinta del shell. Si el
+emulador se lanza ahí, **el shell lo mata al terminar esa llamada**: el proceso
+desaparece sin ningún error y parece un crash.
+
+La forma más simple es usar el script incluido:
+
+```bash
+python tools/emu_agent.py start      # arranca desacoplado y espera a que responda
+```
+
+Equivale a esto, si se prefiere a mano:
+
+```bash
+# MAL: el emulador muere al acabar esta llamada
+(./emulador.exe rom/monitor.bin 4000 tarjeta.img --debug &)
+
+# BIEN: proceso independiente que sobrevive
+powershell -Command "Start-Process -FilePath '.\emulador.exe' -ArgumentList \
+  'rom/monitor.bin','4000','tarjeta.img','--debug' \
+  -RedirectStandardOutput '.tmp\emu.log' -RedirectStandardError '.tmp\emu.err' \
+  -WindowStyle Normal"
+```
+
+En Linux/macOS sería `setsid ./emulador.exe ... > .tmp/emu.log 2>&1 &`.
+
+Opciones útiles:
+
+| Opción | Para qué |
+|---|---|
+| `--debug` | Activa el HTTP (sin esto no hay capturas) |
+| `EMU_AUDIO_DEVICE="..."` | Evita el dispositivo virtual (latencia) |
+| `EMU_TRACE=1` | Informa de anomalías de rendimiento |
+| `EMU_WAV=ruta.wav` | Graba el SID, para análisis de audio |
+
+#### Herramienta `tools/emu_agent.py`
+
+Envuelve el flujo completo, para no repetir estos detalles en cada sesión:
+
+```bash
+python tools/emu_agent.py start                      # arranca y espera
+python tools/emu_agent.py load PACMAN.BIN 0800       # carga por el UART
+python tools/emu_agent.py run 0800                   # ejecuta
+python tools/emu_agent.py screenshot pantalla.png    # captura PNG
+python tools/emu_agent.py state                      # /state.txt
+python tools/emu_agent.py vram                       # /vram.json
+python tools/emu_agent.py ram 0 256                  # RAM en hex
+python tools/emu_agent.py status                     # ¿sigue vivo?
+python tools/emu_agent.py stop                       # detener
+```
+
+`start` sondea hasta que el emulador responde (no duerme un tiempo fijo) y
+`status` comprueba si el proceso vive y si el HTTP contesta: las dos cosas que
+un agente debe mirar antes de concluir que algo falla.
+
+#### 2. Esperar a que esté listo
+
+No dormir un tiempo fijo: **sondear** hasta que responda.
+
+```python
+import time, urllib.request
+
+for _ in range(50):
+    try:
+        urllib.request.urlopen("http://127.0.0.1:8080/", timeout=1)
+        break
+    except OSError:
+        time.sleep(0.2)
+else:
+    raise RuntimeError("el emulador no arrancó")
+```
+
+#### 3. Conectar al UART y cargar el programa
+
+El UART es un socket TCP crudo en el puerto 4000 (o el que se indique).
+
+```python
+import socket, time
+
+s = socket.create_connection(("127.0.0.1", 4000), timeout=5)
+time.sleep(0.5)          # da tiempo al monitor a mandar el prompt
+s.sendall(b"load JUEGO.BIN 0800\r")
+time.sleep(2.5)          # el monitor carga y responde
+s.sendall(b"r 0800\r")   # ejecutar
+time.sleep(2)
+```
+
+> **La dirección importa:** debe coincidir con la de enlace del binario. El SID
+> player va en `2700`, no en `0800`. Cargarlo mal no da error: ejecuta basura y
+> no imprime nada.
+
+#### 4. Observar el resultado
 
 ```python
 import urllib.request
 
-png = urllib.request.urlopen("http://localhost:8080/screen.png").read()
-open("pantalla.png", "wb").write(png)   # analizar con PIL, open() de imagen, etc.
+png = urllib.request.urlopen("http://127.0.0.1:8080/screen.png").read()
+open("pantalla.png", "wb").write(png)   # analizar con PIL
 ```
+
+| Qué se quiere saber | Dónde |
+|---|---|
+| Cómo se ve | `/screen.png` (o `?scale=2` para leer texto) |
+| Qué debería dibujarse | `/vram.json` (tilemap, atributos, sprites) |
+| Si el programa toca el vídeo | `/state.txt` → `tiles escritos` |
+| Estado del joystick y LEDs | `/state.txt` → `puerto 1` y `puerto 2` |
+| Registros del SID | `/state.txt` → `voz N` y `envolventes` |
+| Qué hay en RAM | `/ram.bin?start=0&len=256` |
+
+#### 5. Comprobar que sigue vivo antes de concluir
+
+Si una petición falla, **no asumir un bug**: comprobar el proceso.
+
+```python
+import subprocess
+alive = "emulador.exe" in subprocess.run(
+    ["tasklist", "/FI", "IMAGENAME eq emulador.exe"],
+    capture_output=True, text=True).stdout
+```
+
+Si no está vivo y se lanzó con `&`, es el cierre del shell. Relanzarlo
+desacoplado y repetir.
+
+#### 6. Pararlo al terminar
+
+```bash
+taskkill //F //IM emulador.exe
+```
+
+#### Errores típicos de un agente
+
+| Error | Consecuencia |
+|---|---|
+| Lanzarlo con `&` en una llamada del shell | Parece que se cae |
+| Usar `sleep` fijo en lugar de sondear | Peticiones que fallan al arrancar |
+| Usar `localhost` la primera vez | Espera de hasta 1,6 s (resolución DNS) |
+| Olvidar `--debug` | `ConnectionRefused` en el puerto 8080 |
+| Cargar en la dirección equivocada | Pantalla en blanco, sin mensaje de error |
+| Concluir "va congelado" de una captura | Dos capturas nunca son idénticas (y no deben serlo) |
 
 > **Nota:** el PNG va sin comprimir (deflate "stored") porque no se depende de
 > zlib. Pesa ~230 KB, pero se genera en memoria y se envía por tramos, así que
