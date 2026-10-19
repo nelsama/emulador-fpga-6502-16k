@@ -20,6 +20,7 @@
   #define SOCK_ERR WSAGetLastError()
   #define EAGAIN_LIKE(e) ((e) == WSAEWOULDBLOCK)
   #define EINTR_LIKE(e)  ((e) == WSAEINTR)
+  #define SHUT_WR_ SD_SEND
 #else
   #include <arpa/inet.h>
   #include <netinet/in.h>
@@ -29,6 +30,7 @@
   #define SOCK_ERR errno
   #define EAGAIN_LIKE(e) ((e) == EAGAIN || (e) == EWOULDBLOCK)
   #define EINTR_LIKE(e)  ((e) == EINTR)
+  #define SHUT_WR_ SHUT_WR
 #endif
 
 namespace {
@@ -116,28 +118,59 @@ bool DebugServer::start(int port, Bus& bus) {
   bus_ = &bus;
   port_ = port;
 
-  long long s = (long long)::socket(AF_INET, SOCK_STREAM, 0);
-  if (s == kInvalid) return false;
-
+  // Dos sockets de escucha: uno IPv4 y otro IPv6, ambos SOLO en loopback.
+  //
+  // Motivo: los clientes resuelven 'localhost' primero a ::1 (IPv6). Si el
+  // servidor solo escuchaba en 127.0.0.1, el cliente esperaba al timeout de la
+  // conexión IPv6 antes de reintentar en IPv4: urllib tardaba más de 2 segundos
+  // por petición en vez de 20 ms.
+  //
+  // No sirve un único socket IPv6 con IPV6_V6ONLY=0: Windows no mapea
+  // 127.0.0.1 a ::ffff:127.0.0.1, así que seguiría sin atender IPv4.
+  //
+  // Para que dos sockets compartan puerto hacen falta SO_REUSEADDR en ambos y
+  // IPV6_V6ONLY=1 en el de IPv6. Sigue sin estar expuesto a la red: solo
+  // direcciones de loopback.
   int one = 1;
-  setsockopt((SOCKET)s, SOL_SOCKET, SO_REUSEADDR, (const char*)&one, sizeof(one));
+  auto abrir = [&](int familia) -> long long {
+    long long sk = (long long)::socket(familia, SOCK_STREAM, 0);
+    if (sk == kInvalid) return kInvalid;
+    setsockopt((SOCKET)sk, SOL_SOCKET, SO_REUSEADDR, (const char*)&one, sizeof(one));
 
-  sockaddr_in addr{};
-  addr.sin_family = AF_INET;
-  addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-  addr.sin_port = htons((unsigned short)port);
+    int rc;
+    if (familia == AF_INET6) {
+#ifdef _WIN32
+      int v6only = 1; // socket independiente del IPv4
+      setsockopt((SOCKET)sk, IPPROTO_IPV6, IPV6_V6ONLY, (const char*)&v6only, sizeof(v6only));
+#endif
+      sockaddr_in6 a{};
+      a.sin6_family = AF_INET6;
+      a.sin6_addr = in6addr_loopback;
+      a.sin6_port = htons((unsigned short)port);
+      rc = ::bind((SOCKET)sk, (sockaddr*)&a, sizeof(a));
+    } else {
+      sockaddr_in a{};
+      a.sin_family = AF_INET;
+      a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+      a.sin_port = htons((unsigned short)port);
+      rc = ::bind((SOCKET)sk, (sockaddr*)&a, sizeof(a));
+    }
 
-  if (::bind((SOCKET)s, (sockaddr*)&addr, sizeof(addr)) != 0) {
+    if (rc != 0 || ::listen((SOCKET)sk, 8) != 0) {
+      CLOSE_SOCK((SOCKET)sk);
+      return kInvalid;
+    }
+    set_nonblocking(sk);
+    return sk;
+  };
+
+  listen_ = abrir(AF_INET);
+  listen6_ = abrir(AF_INET6);
+
+  if (listen_ == kInvalid && listen6_ == kInvalid) {
     std::fprintf(stderr, "debug: no se pudo abrir el puerto %d (ocupado?)\n", port);
-    CLOSE_SOCK((SOCKET)s);
     return false;
   }
-  if (::listen((SOCKET)s, 8) != 0) {
-    CLOSE_SOCK((SOCKET)s);
-    return false;
-  }
-  set_nonblocking(s);
-  listen_ = s;
 
   std::printf("Debug HTTP: http://localhost:%d  (pantalla, VRAM, estado, RAM)\n", port);
   return true;
@@ -153,30 +186,38 @@ void DebugServer::stop() {
     CLOSE_SOCK((SOCKET)listen_);
     listen_ = kInvalid;
   }
+  if (listen6_ != kInvalid) {
+    CLOSE_SOCK((SOCKET)listen6_);
+    listen6_ = kInvalid;
+  }
 }
 
 void DebugServer::poll() {
-  if (listen_ == kInvalid) return;
-
-  // 1) Aceptar conexiones nuevas. Se atienden varias a la vez para que el
-  //    polling de la página de índice (una petición cada 500 ms) y una captura
-  //    pedida por una herramienta externa no se pisen.
+  if (listen_ == kInvalid && listen6_ == kInvalid) return;
+  // 1) Aceptar conexiones nuevas en ambos sockets (IPv4 e IPv6).
   for (int i = 0; i < 8; i++) {
-    SOCKET s = ::accept((SOCKET)listen_, nullptr, nullptr);
-    if ((long long)s == kInvalid) break;
-    set_nonblocking((long long)s);
-    // SO_LINGER con tiempo: si por algún motivo el FIN no llega, el cierre
-    // espera a entregar los datos pendientes en vez de abortar con RST.
+    bool algo = false;
+    long long listeners[2] = {listen_, listen6_};
+    for (long long ls : listeners) {
+      if (ls == kInvalid) continue;
+      SOCKET s = ::accept((SOCKET)ls, nullptr, nullptr);
+      if ((long long)s == kInvalid) continue;
+      algo = true;
+      set_nonblocking((long long)s);
+      // SO_LINGER con tiempo: si por algún motivo el FIN no llega, el cierre
+      // espera a entregar los datos pendientes en vez de abortar con RST.
 #ifdef _WIN32
-    linger lg{};
-    lg.l_onoff = 1;
-    lg.l_linger = 1;
-    setsockopt(s, SOL_SOCKET, SO_LINGER, (const char*)&lg, sizeof(lg));
+      linger lg{};
+      lg.l_onoff = 1;
+      lg.l_linger = 1;
+      setsockopt(s, SOL_SOCKET, SO_LINGER, (const char*)&lg, sizeof(lg));
 #endif
-    auto c = std::make_unique<Conn>();
-    c->sock = (long long)s;
-    c->created = now_ms();
-    conns_.push_back(std::move(c));
+      auto c = std::make_unique<Conn>();
+      c->sock = (long long)s;
+      c->created = now_ms();
+      conns_.push_back(std::move(c));
+    }
+    if (!algo) break;
   }
 
   // Tope de seguridad: si un cliente se queda colgado, no acumular.
@@ -250,6 +291,15 @@ bool DebugServer::step(Conn& c) {
       }
       if (c.sent < c.out.size()) return ahora - c.created < 60000;
 
+      // Todo enviado. Se cierra la nosa mitad (FIN) INMEDIATAMENTE.
+      //
+      // Antes se esperaba al FIN del cliente sin enviar el nuestro, y eso es un
+      // interbloqueo: el cliente (urllib, curl) espera a que el servidor cierre
+      // porque se anunció "Connection: close", y el servidor esperaba al FIN
+      // del cliente. Resultado: cada petición tardaba segundos (o se quedaba
+      // colgada hasta el timeout).
+      ::shutdown((SOCKET)c.sock, SHUT_WR_);
+
       c.out.clear();
       c.out.shrink_to_fit();
       c.estado = Conn::PENDIENTE;
@@ -258,24 +308,20 @@ bool DebugServer::step(Conn& c) {
     }
 
     case Conn::PENDIENTE: {
-      // Ya está todo entregado al kernel. Leer hasta ver el FIN del cliente:
-      // al leer todo, el cierre posterior no genera RST.
-      // El cliente puede tardar: urllib lee en su propio proceso y cierra
-      // unos milisegundos después. Por eso este margen es amplio; al recibir
-      // el FIN se cierra de inmediato.
+      // Ya hay FIN enviado. Se drena lo que envíe el cliente para que el cierre
+      // no acabe en RST (con datos sin leer en el buffer de recepción, Windows
+      // responde con un reset y el cliente pierde la respuesta).
       for (int i = 0; i < 8; i++) {
         const int n = ::recv((SOCKET)c.sock, buf, sizeof(buf), 0);
-        if (n > 0) continue;
-        if (n == 0) {
-          c.estado = Conn::CERRANDO;
-          return false;
-        }
+        if (n > 0) continue;    // basura extra del cliente: se descarta
+        if (n == 0) return false; // FIN del cliente: cerrar en orden
         const int e = SOCK_ERR;
         if (EAGAIN_LIKE(e) || EINTR_LIKE(e)) break;
         return false;
       }
-      // HTTP/1.0 que no cierra nunca: liberar el hueco pasado un tiempo.
-      return ahora - c.fase <= 10000;
+      // Si el cliente no cierra (raro), soltar el hueco pronto: la respuesta ya
+      // está entregada y no gana nada esperando.
+      return ahora - c.fase <= 500;
     }
 
     case Conn::CERRANDO:

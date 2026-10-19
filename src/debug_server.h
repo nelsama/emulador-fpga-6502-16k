@@ -37,7 +37,7 @@ public:
   void poll();
 
   int port() const { return port_; }
-  bool active() const { return listen_ != kInvalid; }
+  bool active() const { return listen_ != kInvalid || listen6_ != kInvalid; }
 
 private:
   struct Conn;
@@ -54,7 +54,8 @@ private:
   static long long now_ms();
 
   static constexpr long long kInvalid = -1;
-  long long listen_ = kInvalid;
+  long long listen_ = kInvalid;  // socket de escucha IPv4 (127.0.0.1)
+  long long listen6_ = kInvalid; // socket de escucha IPv6 (::1)
   int port_ = 0;
   Bus* bus_ = nullptr;
   Response resp_;
