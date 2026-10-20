@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <string>
 
 #include "device.h"
 
@@ -30,6 +31,17 @@ public:
   // dejaría el byte en el cable; aquí lo guardamos hasta que se pueda enviar).
   bool has_tx() const { return !tx_fifo_.empty(); }
   uint8_t dequeue_tx();
+
+  // Tap de SOLO LECTURA para observar lo transmitido sin consumirlo.
+  //
+  // Lo usa el terminal de la ventana: copia de lo que sale hacia PuTTY, sin
+  // interferir con la FIFO. Si consumiera de `tx_fifo_`, PuTTY dejaría de
+  // recibir datos.
+  // Devuelve cuántos bytes quedan sin leer del flujo observado.
+  size_t tap_pending() const { return tap_.size(); }
+  uint8_t tap_pop();          // saca el siguiente byte pendiente (0 si no hay)
+  const std::string& tap_text() const { return tap_text_; }
+  void tap_clear() { tap_.clear(); tap_text_.clear(); }
 
   // Entrada desde el host (PuTTY). Si RX_VALID ya estaba activo, marca overrun.
   void enqueue_rx(uint8_t v);
@@ -59,6 +71,13 @@ private:
   std::deque<uint8_t> tx_fifo_;
   bool tx_ready_ = true;
   bool tx_irq_pending_ = false; // flanco: se acaba de completar una transmisión
+
+  // Flujo observado para el terminal de la ventana (ver tap_pending()).
+  std::deque<uint8_t> tap_;
+  std::string tap_text_;      // últimas líneas, ya con el formato del terminal
+  static constexpr size_t TAP_MAX = 64 * 1024;   // tope por si nadie lo vacía
+  static constexpr size_t TAP_TEXT_MAX = 32 * 1024;
+  void tap_push(uint8_t v);   // alimenta el tap (lo llama write de TX)
 
   // Control / baudrate
   bool     tx_irq_en_ = false;

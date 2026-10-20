@@ -64,6 +64,9 @@ void Uart::write(uint16_t addr, uint8_t data, bool& resp) {
       if (tx_fifo_.size() < TX_FIFO_MAX) {
         tx_fifo_.push_back(data);
       }
+      // Copia para el terminal de la ventana. No consume la FIFO: PuTTY sigue
+      // recibiendo lo mismo que antes.
+      tap_push(data);
       tx_ready_ = true;
       tx_irq_pending_ = true; // flanco de "transmisión completada"
       update_irq();
@@ -92,6 +95,39 @@ void Uart::write(uint16_t addr, uint8_t data, bool& resp) {
 uint8_t Uart::dequeue_tx() {
   uint8_t v = tx_fifo_.front();
   tx_fifo_.pop_front();
+  return v;
+}
+
+void Uart::tap_push(uint8_t v) {
+  // Cola para quien consuma byte a byte (si se quiere). Se descarta lo más
+  // antiguo si nadie la vacía, para no crecer sin límite.
+  if (tap_.size() >= TAP_MAX) tap_.pop_front();
+  tap_.push_back(v);
+
+  // Texto del terminal: se interpretan los saltos de línea y se recorta a las
+  // últimas líneas. Es lo que pinta la ventana.
+  //
+  // El firmware manda "\r\n"; el '\r' se ignora (aquí no se sobreimprime
+  // línea) y el '\n' abre línea nueva.
+  if (v == '\n') {
+    tap_text_.push_back('\n');
+  } else if (v == '\r') {
+    // ignorar
+  } else if (v >= 0x20 || v == '\t') {
+    tap_text_.push_back((char)v);
+  }
+  // Por encima del tope se tira lo más antiguo (por líneas completas).
+  if (tap_text_.size() > TAP_TEXT_MAX) {
+    const size_t corte = tap_text_.find('\n', tap_text_.size() - TAP_TEXT_MAX);
+    if (corte != std::string::npos) tap_text_.erase(0, corte + 1);
+    else tap_text_.erase(0, tap_text_.size() - TAP_TEXT_MAX);
+  }
+}
+
+uint8_t Uart::tap_pop() {
+  if (tap_.empty()) return 0;
+  const uint8_t v = tap_.front();
+  tap_.pop_front();
   return v;
 }
 

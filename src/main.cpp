@@ -189,7 +189,7 @@ int main(int argc, char** argv) {
 
   // Ventana: vídeo del Core de Vídeo + los 6 LEDs del Tang Nano 9K.
   EmuWindow window;
-  window.start(Video::W, Video::H, 3);
+  window.start(Video::W, Video::H, 3, /*terminal=*/true);
   uint32_t* framebuffer = new uint32_t[Video::W * Video::H];
   auto proximo_frame = std::chrono::steady_clock::now();  // refresco de ventana
 
@@ -417,6 +417,7 @@ int main(int argc, char** argv) {
         proximo_frame = ahora + std::chrono::microseconds(16683);
         const auto t_draw0 = clock::now();
         bus.video()->render(framebuffer);
+        if (window.has_terminal()) window.set_terminal(uart.tap_text());
         window.present(framebuffer, bus.gpio()->leds());
         draw_ms = std::chrono::duration<double, std::milli>(clock::now() - t_draw0).count();
       }

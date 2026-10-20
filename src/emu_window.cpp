@@ -10,6 +10,8 @@
 #include <SDL.h>
 #endif
 
+#include "video/font_c64.h"
+
 EmuWindow::~EmuWindow() {
 #ifdef HAVE_SDL2
   if (texture_) SDL_DestroyTexture(static_cast<SDL_Texture*>(texture_));
@@ -73,6 +75,33 @@ void draw_led(SDL_Renderer* r, int cx, int cy, int radius, bool on) {
   }
 }
 
+// --- Terminal del UART --------------------------------------------------------
+//
+// SDL2 no dibuja texto, así que se reutiliza la fuente 8x8 del Core de Vídeo
+// (src/video/font_c64.h) y se pinta glifo a glifo, escalada x2 (16x16 px por
+// carácter). El panel es de solo lectura: muestra lo mismo que sale por el
+// socket, para depurar sin cambiar a PuTTY.
+static constexpr int TERM_CW = 8 * 2;   // ancho de celda en píxeles
+static constexpr int TERM_CH = 8 * 2;   // alto de celda en píxeles
+static constexpr int TERM_COLS = 60;    // columnas visibles
+static constexpr int TERM_ROWS = 14;    // renglones visibles
+static constexpr int TERM_PAD = 10;     // margen interior
+
+void draw_glyph(SDL_Renderer* r, int x, int y, char c) {
+  // La fuente cubre ASCII desde $20. Lo no imprimible se pinta como espacio.
+  const int idx = ((unsigned char)c) - 0x20;
+  if (idx < 0 || idx >= 96) return;
+  for (int row = 0; row < 8; row++) {
+    const uint8_t bits = kFontC64[idx * 8 + row];
+    if (!bits) continue;
+    for (int col = 0; col < 8; col++) {
+      if (!(bits & (0x80 >> col))) continue;
+      SDL_Rect px{x + col * 2, y + row * 2, 2, 2};
+      SDL_RenderFillRect(r, &px);
+    }
+  }
+}
+
 // --- Fuentes de entrada -------------------------------------------------------
 //
 // Teclado y mando se mantienen SEPARADOS y se combinan poniendo a 0 (pulsado,
@@ -96,16 +125,39 @@ struct Entrada {
 
 } // namespace
 
-bool EmuWindow::start(int video_w, int video_h, int scale) {
+bool EmuWindow::start(int video_w, int video_h, int scale, bool terminal) {
 #ifdef HAVE_SDL2
   w_ = video_w;
   h_ = video_h;
   scale_ = scale;
-  panel_h_ = 78;
+  terminal_ = terminal;
 
+  // Alto del panel inferior: la placa con los LEDs y, si se pide, el terminal.
+  const int board_h = 46;
+  panel_h_ = 78;
+  if (terminal_) panel_h_ += board_h + TERM_ROWS * TERM_CH + 2 * TERM_PAD + 8;
+
+  // Con el terminal la ventana es bastante alta y puede no caber en pantallas
+  // pequeñas (p. ej. 1366x768 o portátiles). Se reduce la escala del vídeo
+  // antes que dejar la ventana cortada, que es peor para depurar.
   if (SDL_InitSubSystem(SDL_INIT_VIDEO) != 0) {
     std::fprintf(stderr, "video: SDL_InitSubSystem fallo: %s\n", SDL_GetError());
     return false;
+  }
+
+  // Con el terminal la ventana es bastante alta y puede no caber en pantallas
+  // pequeñas (p. ej. 1366x768 o portátiles). Se reduce la escala del vídeo de
+  // ×3 a ×2 (nunca más abajo: se vería peor que el original) antes que dejar
+  // la ventana cortada.
+  // (Después de SDL_InitSubSystem: antes no hay modo de vídeo consultable.)
+  // Ojo: con DPI al 125% SDL devuelve el alto en px escalados, de ahí el margen
+  // generoso.
+  if (terminal_) {
+    SDL_Rect usable{0, 0, 0, 0};
+    if (SDL_GetDisplayUsableBounds(0, &usable) == 0 && usable.h > 0 &&
+        scale_ > 2 && h_ * scale_ + panel_h_ + 110 > usable.h) {
+      scale_ = 2;
+    }
   }
   // Mandos del PC: si no hay ninguno, SDL simplemente no genera eventos. Se
   // inicializa aparte para que un fallo no impida abrir la ventana.
@@ -150,7 +202,8 @@ bool EmuWindow::start(int video_w, int video_h, int scale) {
   texture_ = tex;
   active_ = true;
   joy_ = Gpio::JOY_IDLE;
-  std::printf("Video: ventana %dx%d (escala %dx) + panel de LEDs\n", w_, h_, scale_);
+  std::printf("Video: ventana %dx%d (escala %dx) + panel de LEDs%s\n", w_, h_, scale_,
+              terminal_ ? " + terminal UART" : "");
   std::printf("Joystick (puerto 1): cursores o WASD para mover, Espacio/Z/Ctrl para fuego."
               " También sirve un mando conectado al PC.\n");
   return true;
@@ -161,6 +214,26 @@ bool EmuWindow::start(int video_w, int video_h, int scale) {
   std::printf("Video: sin SDL2, ventana desactivada\n");
   return false;
 #endif
+}
+
+void EmuWindow::set_terminal(const std::string& lineas) {
+  // Se parte el texto en renglones y se guardan los últimos que pueden verse.
+  // El texto del UART ya viene con '\n' como separador (ver Uart::tap_push).
+  term_lineas_.clear();
+  size_t ini = 0;
+  while (ini <= lineas.size()) {
+    size_t fin = lineas.find('\n', ini);
+    if (fin == std::string::npos) fin = lineas.size();
+    term_lineas_.emplace_back(lineas, ini, fin - ini);
+    if (fin == lineas.size()) break;
+    ini = fin + 1;
+  }
+  // Tope: solo interesan las últimas.
+  const size_t tope = 200;
+  if (term_lineas_.size() > tope) {
+    term_lineas_.erase(term_lineas_.begin(),
+                       term_lineas_.end() - (std::ptrdiff_t)tope);
+  }
 }
 
 void EmuWindow::present(const uint32_t* rgb, uint8_t leds) {
@@ -193,7 +266,7 @@ void EmuWindow::present(const uint32_t* rgb, uint8_t leds) {
   const int board_w = 6 * 30 + 34;
   const int board_h = 46;
   const int board_x = (w_ * scale_ - board_w) / 2;
-  const int board_y = panel_y + (panel_h_ - board_h) / 2;
+  const int board_y = panel_y + 16;
   SDL_Rect board{board_x, board_y, board_w, board_h};
   fill_round_rect(ren, board, 8, SDL_Color{18, 40, 30, 255});
   SDL_SetRenderDrawColor(ren, 30, 70, 52, 255);
@@ -206,6 +279,35 @@ void EmuWindow::present(const uint32_t* rgb, uint8_t leds) {
   const int cy = board_y + board_h / 2;
   for (int i = 0; i < 6; i++) {
     draw_led(ren, first_x + i * spacing, cy, radius, (leds >> i) & 1);
+  }
+
+  // --- Terminal del UART ---
+  if (terminal_) {
+    const int term_y = board_y + board_h + 8;
+    const int term_h = panel_h_ - (term_y - panel_y) - 8;
+    SDL_Rect term{TERM_PAD / 2, term_y, w_ * scale_ - TERM_PAD, term_h};
+    SDL_SetRenderDrawColor(ren, 10, 14, 12, 255);
+    SDL_RenderFillRect(ren, &term);
+    SDL_SetRenderDrawColor(ren, 30, 48, 38, 255);
+    SDL_RenderDrawRect(ren, &term);
+
+    // Se dibujan los últimos renglones que caben, alineados abajo: lo más
+    // reciente queda siempre visible, como en un terminal real.
+    const int visibles = (term_h - TERM_PAD) / TERM_CH;
+    const int total = (int)term_lineas_.size();
+    const int desde = total > visibles ? total - visibles : 0;
+    SDL_SetRenderDrawColor(ren, 180, 220, 180, 255);
+    int y = term_y + TERM_PAD / 2;
+    for (int i = desde; i < total; i++) {
+      const std::string& linea = term_lineas_[(size_t)i];
+      int x = term.x + TERM_PAD / 2;
+      const int maxc = (term.w - TERM_PAD) / TERM_CW;
+      for (int c = 0; c < (int)linea.size() && c < maxc; c++) {
+        draw_glyph(ren, x, y, linea[(size_t)c]);
+        x += TERM_CW;
+      }
+      y += TERM_CH;
+    }
   }
 
   SDL_RenderPresent(ren);

@@ -742,6 +742,34 @@ SID ($D400-$D41F):
   envolventes: ENV1=114 ENV2=181 ENV3=  0 MAX=181  ($D41D/$D41E/$D41C/$D41F)
 ```
 
+#### Terminal del UART en la ventana
+
+Debajo de la placa, la ventana muestra un **panel de terminal** con la salida
+del UART: exactamente lo mismo que saldría por PuTTY. Sirve para depurar sin
+cambiar de ventana (cargar un binario, ver un listado, leer mensajes del
+programa).
+
+Cómo funciona:
+
+- Es un **tap de solo lectura** sobre el transmisor (`Uart::tap_text()`). No
+  consume la FIFO de transmisión, así que **PuTTY sigue recibiendo** los mismos
+  bytes si está conectado. Es solo un espejo.
+- Los caracteres de control no se pintan: `\r` se descarta y `\n` abre línea.
+  Si el programa hace movimiento de cursor (`ESC[...`) no se interpreta; para
+  eso está PuTTY.
+- Se muestran las **últimas 16 líneas**, alineadas abajo: lo más reciente está
+  siempre visible, como en un terminal real.
+- La fuente es la del Core de Vídeo (`src/video/font_c64.h`), escalada ×2.
+
+Con el terminal la ventana es más alta, así que si no cabe en la pantalla se
+reduce automáticamente la escala del vídeo (de ×3 a ×2), sin tocar el panel.
+
+Para desactivarlo (ventana compacta), cambia en `src/main.cpp`:
+
+```cpp
+window.start(Video::W, Video::H, 3, /*terminal=*/false);
+```
+
 ---
 
 ## 10. Depurar un programa paso a paso
@@ -892,7 +920,7 @@ src/
   sid.h/.cpp           SID sobre reSIDfp $D400-$D41F
   gpio_uart.h/.cpp     GPIO $C000-$C003 (joystick + LEDs)
   audio.h/.cpp         salida de audio SDL2 (ring buffer + colchón)
-  emu_window.h/.cpp    ventana: vídeo escalado + panel de 6 LEDs + teclado/mando
+  emu_window.h/.cpp    ventana: vídeo escalado + panel de 6 LEDs + terminal UART
   tcp_server.h/.cpp    UART <-> socket TCP
   debug_server.h/.cpp  servidor HTTP de depuración
   debug_dump.h/.cpp    PNG sin dependencias + volcados de texto

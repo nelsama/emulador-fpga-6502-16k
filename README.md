@@ -203,7 +203,7 @@ src/
   sid.*                SID sobre reSIDfp
   gpio_uart.*          GPIO $C000-$C003 (joystick + LEDs)
   audio.*              salida de audio SDL2
-  emu_window.*         ventana: vídeo + 6 LEDs
+  emu_window.*         ventana: vídeo + 6 LEDs + terminal UART
   tcp_server.*         UART <-> TCP
   debug_server.*       servidor HTTP de depuración (no bloquea la emulación)
   debug_dump.*         PNG/PPM/JSON/texto y volcado de RAM
