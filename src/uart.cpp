@@ -99,114 +99,13 @@ uint8_t Uart::dequeue_tx() {
 }
 
 void Uart::tap_push(uint8_t v) {
-  // Cola para quien consuma byte a byte (si se quiere). Se descarta lo más
-  // antiguo si nadie la vacía, para no crecer sin límite.
+  // Cola para quien consuma byte a byte (si se quiere). Se descarta lo mas
+  // antiguo si nadie la vacia, para no crecer sin limite.
   if (tap_.size() >= TAP_MAX) tap_.pop_front();
   tap_.push_back(v);
 
-  // Texto del terminal de la ventana.
-  //
-  // Se imita lo que haría un emulador de terminal tonto (tipo PuTTY sin
-  // secuencias de escape), que es justo lo que necesita este firmware:
-  //
-  //   - '\r' vuelve al principio de la línea y '\n' baja de línea. El monitor
-  //     manda "\r\n", pero también hay CR sueltos (p. ej. para empezar un
-  //     mensaje en la columna 0), así que se aplican por separado.
-  //   - 0x08 (BS) y 0x7F (DEL) borran el carácter anterior. El monitor usa
-  //     "BS + espacio + BS" para borrar al editar la línea; sin esto quedaban
-  //     caracteres fantasma.
-  //   - 0x1B (ESC) borra la línea visible y a continuación se procesa el
-  //     carácter siguiente: el monitor manda ESC + 'H' para empezar la entrada
-  //     limpia.
-  //   - Los bytes > 0x7F no existen en este sistema: el firmware escribe
-  //     ASCII y la fuente del FPGA solo tiene 96 glifos. Se descartan (con
-  //     PuTTY saldrían como basura, porque tampoco hay UTF-8 en el cable).
-  //   - '\t' se expande a espacios hasta el siguiente múltiplo de 8.
-  //
-  // Las secuencias de escape ANSI (ESC '[' ...) no se interpretan: no se
-  // emiten desde este firmware y en PuTTY tampoco habría nada que hacer.
-  switch (v) {
-    case '\r':
-      tap_col_ = 0;     // vuelve a la columna 0 de la línea actual
-      return;
-    case '\n':
-      tap_linea_nueva();
-      return;
-    case 0x08:  // BS
-    case 0x7F:  // DEL
-      // Borra el carácter anterior: si el cursor no está al final, se quita
-      // el de su izquierda y se desplaza el resto (como un terminal real).
-      if (tap_col_ > 0) {
-        const size_t idx = tap_line_start_ + (size_t)(tap_col_ - 1);
-        const size_t fin = tap_text_.find('\n', tap_line_start_);
-        const size_t fin_linea = (fin == std::string::npos) ? tap_text_.size() : fin;
-        if (idx < fin_linea) tap_text_.erase(idx, 1);
-        tap_col_--;
-      }
-      return;
-    case 0x1B:  // ESC: fuera la línea actual
-      tap_text_.resize(tap_line_start_);
-      tap_col_ = 0;
-      return;
-    case '\t':
-      do {
-        tap_escribir(' ');
-      } while (tap_col_ % 8);
-      break;
-    default:
-      if (v < 0x20) return;   // otros controles: se ignoran
-      if (v > 0x7E) return;   // fuera de ASCII imprimible: no existe
-                              // en este sistema (fuente de 96 glifos)
-      tap_escribir((char)v);
-      break;
-  }
-
-  // Por encima del tope se tira lo más antiguo (por líneas completas).
-  if (tap_text_.size() > TAP_TEXT_MAX) {
-    const size_t corte = tap_text_.find('\n', tap_text_.size() - TAP_TEXT_MAX);
-    if (corte != std::string::npos) {
-      const size_t quitados = corte + 1;
-      tap_text_.erase(0, quitados);
-      tap_line_start_ = (tap_line_start_ > quitados) ? tap_line_start_ - quitados : 0;
-    } else {
-      const size_t quitados = tap_text_.size() - TAP_TEXT_MAX;
-      tap_text_.erase(0, quitados);
-      tap_line_start_ = (tap_line_start_ > quitados) ? tap_line_start_ - quitados : 0;
-    }
-  }
-}
-
-// Pone un carácter en la posición del cursor, dentro de la línea actual.
-void Uart::tap_escribir(char c) {
-  const size_t col = (size_t)tap_col_;
-  const size_t fin = tap_text_.find('\n', tap_line_start_);
-  const size_t fin_linea = (fin == std::string::npos) ? tap_text_.size() : fin;
-  const size_t largo = fin_linea - tap_line_start_;
-
-  if (col < largo) {
-    // Sobrescribe (así se comporta un terminal al escribir tras un CR).
-    tap_text_[tap_line_start_ + col] = c;
-  } else {
-    // Más allá del final: se rellena con espacios hasta la columna.
-    for (size_t k = largo; k < col; k++) tap_text_.insert(tap_line_start_ + k, 1, ' ');
-    tap_text_.insert(fin_linea, 1, c);
-  }
-  tap_col_++;
-}
-
-void Uart::tap_linea_nueva() {
-  // Se cierra la línea actual y el cursor pasa a la siguiente. Si el cursor
-  // estaba antes del final (tras un CR), lo que quedaba a la derecha se
-  // conserva: es lo que hace una consola tonta.
-  const size_t fin = tap_text_.find('\n', tap_line_start_);
-  const size_t fin_linea = (fin == std::string::npos) ? tap_text_.size() : fin;
-  if (fin == std::string::npos) {
-    tap_text_.push_back('\n');
-    tap_line_start_ = tap_text_.size();
-  } else {
-    tap_line_start_ = fin_linea + 1;
-  }
-  tap_col_ = 0;
+  // El terminal interpreta el flujo: ANSI + CP437. Ver terminal_state.h.
+  term_.feed(v);
 }
 
 uint8_t Uart::tap_pop() {

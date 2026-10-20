@@ -12,6 +12,7 @@
 #endif
 
 #include "video/font_c64.h"
+#include "terminal/font_cp437.h"
 
 EmuWindow::~EmuWindow() {
 #ifdef HAVE_SDL2
@@ -92,6 +93,9 @@ static constexpr int VIDEO_PAD = 16;
 // Margen lateral de los módulos del panel y caja del terminal.
 static constexpr int PANEL_MARGEN = 8;
 
+// Alto de cada fila del módulo de puerto 1 (compacto: 8 filas caben en poco).
+static constexpr int FILA_P1 = 14;
+
 void draw_glyph(SDL_Renderer* r, int x, int y, char c, int f) {
   // La fuente cubre ASCII desde $20. Lo no imprimible se pinta como espacio.
   // `f` es el factor de escala de cada píxel del glifo.
@@ -107,6 +111,31 @@ void draw_glyph(SDL_Renderer* r, int x, int y, char c, int f) {
     }
   }
 }
+
+// Glifo CP437 (8x16) con fondo y color de tinta dados.
+void draw_glyph_cp437(SDL_Renderer* r, int x, int y, int f, uint8_t ch,
+                      SDL_Color tinta) {
+  const uint8_t* g = &kFontCp437[(size_t)ch * 16];
+  SDL_SetRenderDrawColor(r, tinta.r, tinta.g, tinta.b, 255);
+  for (int row = 0; row < 16; row++) {
+    const uint8_t bits = g[row];
+    if (!bits) continue;
+    for (int col = 0; col < 8; col++) {
+      if (!(bits & (0x80 >> col))) continue;
+      SDL_Rect px{x + col * f, y + row * f, f, f};
+      SDL_RenderFillRect(r, &px);
+    }
+  }
+}
+
+// Paleta ANSI de 16 colores, la de consola (VGA). La usan tanto el texto como
+// el fondo de cada celda del terminal.
+const SDL_Color kAnsi[16] = {
+    {0, 0, 0, 255},       {170, 0, 0, 255},     {0, 170, 0, 255},     {170, 85, 0, 255},
+    {0, 0, 170, 255},     {170, 0, 170, 255},   {0, 170, 170, 255},   {170, 170, 170, 255},
+    {85, 85, 85, 255},    {255, 85, 85, 255},   {85, 255, 85, 255},   {255, 255, 85, 255},
+    {85, 85, 255, 255},   {255, 85, 255, 255},  {85, 255, 255, 255},  {255, 255, 255, 255},
+};
 
 // --- Fuentes de entrada -------------------------------------------------------
 //
@@ -193,10 +222,16 @@ bool EmuWindow::start(int video_w, int video_h, int scale, bool terminal) {
     std::printf("Mandos disponibles: %d\n", SDL_NumJoysticks());
   }
 
+  // Alto necesario para el panel: placa + puerto 1 + consola completa (80x24).
+  // Sin esto, la rejilla se corta por abajo cuando el vídeo es bajo.
+  const int panel_alto = 12 + 46 + 6 + (30 + 12 + 8 * FILA_P1 + 4) + 6 +
+                         TerminalState::ROWS * TERM_CH + 2 * TERM_PAD + 12;
+  const int alto_ventana = (h_ * scale_ > panel_alto) ? h_ * scale_ : panel_alto;
+
   SDL_Window* win = SDL_CreateWindow(
       "Emulador FPGA 6502 - Tang Nano 9K",
       SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-      w_ * scale_ + panel_w_, h_ * scale_,
+      w_ * scale_ + panel_w_, alto_ventana,
       SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE);
   if (!win) {
     std::fprintf(stderr, "video: SDL_CreateWindow fallo: %s\n", SDL_GetError());
@@ -205,7 +240,7 @@ bool EmuWindow::start(int video_w, int video_h, int scale, bool terminal) {
   // Tamano minimo: el panel lateral y el video a la escala calculada. Asi el
   // boton de maximizar (y el arrastre de bordes) siempre amplian el video y
   // nunca aplastan el panel.
-  SDL_SetWindowMinimumSize(win, w_ * scale_ + panel_w_, h_ * scale_);
+  SDL_SetWindowMinimumSize(win, w_ * scale_ + panel_w_, alto_ventana);
 
   SDL_Renderer* ren = SDL_CreateRenderer(win, -1, SDL_RENDERER_ACCELERATED);
   if (!ren) ren = SDL_CreateRenderer(win, -1, SDL_RENDERER_SOFTWARE);
@@ -246,26 +281,6 @@ bool EmuWindow::start(int video_w, int video_h, int scale, bool terminal) {
 #endif
 }
 
-void EmuWindow::set_terminal(const std::string& lineas) {
-  // Se parte el texto en renglones y se guardan los últimos que pueden verse.
-  // El texto del UART ya viene con '\n' como separador (ver Uart::tap_push).
-  term_lineas_.clear();
-  size_t ini = 0;
-  while (ini <= lineas.size()) {
-    size_t fin = lineas.find('\n', ini);
-    if (fin == std::string::npos) fin = lineas.size();
-    term_lineas_.emplace_back(lineas, ini, fin - ini);
-    if (fin == lineas.size()) break;
-    ini = fin + 1;
-  }
-  // Tope: solo interesan las últimas.
-  const size_t tope = 200;
-  if (term_lineas_.size() > tope) {
-    term_lineas_.erase(term_lineas_.begin(),
-                       term_lineas_.end() - (std::ptrdiff_t)tope);
-  }
-}
-
 void EmuWindow::toggle_fullscreen() {
 #ifdef HAVE_SDL2
   if (!active_ || !window_) return;
@@ -291,6 +306,54 @@ void EmuWindow::toggle_fullscreen() {
   }
   std::printf("Video: %s\n", fullscreen_ ? "pantalla completa (F11 para salir)" : "ventana");
   std::fflush(stdout);
+#endif
+}
+
+// Pinta la rejilla 80x24 del terminal dentro de `caja`, con sus colores.
+void EmuWindow::dibujar_terminal(void* renderer, const void* caja) {
+#ifdef HAVE_SDL2
+  SDL_Renderer* ren = static_cast<SDL_Renderer*>(renderer);
+  const SDL_Rect* term = static_cast<const SDL_Rect*>(caja);
+  const int f = TERM_SCALE;
+  const int cw = 8 * f;
+  const int chh = 16 * f;
+  const int x0 = term->x + TERM_PAD / 2;
+  const int y0 = term->y + TERM_PAD / 2;
+
+  for (int fila = 0; fila < TerminalState::ROWS; fila++) {
+    for (int col = 0; col < TerminalState::COLS; col++) {
+      const TerminalState::Celda& celda = term_.celda(fila, col);
+      // Color efectivo: el inverso intercambia tinta y fondo.
+      int fg = celda.at.fg & 15;
+      int bg = celda.at.bg & 15;
+      if (celda.at.negrita) fg |= 8;
+      if (celda.at.inverso) {
+        const int t = fg;
+        fg = bg;
+        bg = t;
+      }
+      const int px = x0 + col * cw;
+      const int py = y0 + fila * chh;
+
+      // Fondo de la celda (solo si no es negro: ahorra miles de rectángulos
+      // en pantallas casi vacías).
+      if (bg != 0) {
+        SDL_Rect r{px, py, cw, chh};
+        SDL_SetRenderDrawColor(ren, kAnsi[bg].r, kAnsi[bg].g, kAnsi[bg].b, 255);
+        SDL_RenderFillRect(ren, &r);
+      }
+      if (celda.ch > 0x20) {
+        draw_glyph_cp437(ren, px, py, f, celda.ch, kAnsi[fg]);
+      }
+    }
+  }
+
+  // Cursor: bloque hueco (marco de 1 px) en la posición actual, si está visible.
+  if (term_.cursor_visible()) {
+    SDL_Rect c{x0 + term_.cursor_col() * cw, y0 + term_.cursor_fila() * chh, cw, chh};
+    SDL_SetRenderDrawColor(ren, 220, 235, 220, 255);
+    SDL_RenderDrawRect(ren, &c);
+  }
 #endif
 }
 
@@ -399,7 +462,7 @@ void EmuWindow::present(const uint32_t* rgb, uint8_t leds) {
     for (int i = 0; i < 6; i++) {
       draw_led(ren, first_x + i * spacing, cy, radius, (leds >> i) & 1);
     }
-    y += board_h + 10;
+    y += board_h + 6;
 
     // --- Módulo 2: pines del puerto 1 (joystick Atari / DB9) ---
     //
@@ -420,7 +483,7 @@ void EmuWindow::present(const uint32_t* rgb, uint8_t leds) {
       // Aviso si el programa no ha configurado los bits 3-7 como entrada.
       const bool aviso = (port1_dir_ & 0xF8) != 0xF8;
 
-      const int alto_modulo = (aviso ? 34 : 24) + 16 + 8 * 18 + 8; // título + cabecera + filas
+      const int alto_modulo = (aviso ? 30 : 20) + 12 + 8 * FILA_P1 + 4; // título + cabecera + filas
       const int mx = PANEL_MARGEN;
       const int mw = panel_w_ - 2 * PANEL_MARGEN;
       SDL_Rect mod{mx, y, mw, alto_modulo};
@@ -457,7 +520,7 @@ void EmuWindow::present(const uint32_t* rgb, uint8_t leds) {
       const int cw = TERM_CW;
       for (int i = 0; i < 8; i++) {
         const Fila& f = filas[i];
-        const int ly = y0 + 16 + i * 18;
+        const int ly = y0 + 14 + i * FILA_P1;
         const bool entrada = (port1_dir_ >> f.bit) & 1;
         const bool nivel = (port1_valor_ >> f.bit) & 1;
         const bool es_joy = f.bit >= 3;
@@ -490,37 +553,34 @@ void EmuWindow::present(const uint32_t* rgb, uint8_t leds) {
         }
       }
 
-      y += alto_modulo + 12;
+      y += alto_modulo + 6;
     }
 
-    // --- Módulo 3: terminal del UART ---
+    // --- Módulo 3: terminal del UART (80x24, ANSI + CP437) ---
     if (terminal_) {
-      const int alto_total = area_h;
-      const int term_h = alto_total - y - 12; // hasta el borde inferior
       const int term_x = PANEL_MARGEN;
       const int term_w = panel_w_ - 2 * PANEL_MARGEN;
+      const int term_h = TerminalState::ROWS * TERM_CH + 2 * TERM_PAD;  // 80x24 fijo
       SDL_Rect term{term_x, y, term_w, term_h};
-      SDL_SetRenderDrawColor(ren, 10, 14, 12, 255);
+      SDL_SetRenderDrawColor(ren, 8, 10, 12, 255);
       SDL_RenderFillRect(ren, &term);
       SDL_SetRenderDrawColor(ren, 30, 48, 38, 255);
       SDL_RenderDrawRect(ren, &term);
 
-      // Se dibujan los últimos renglones que caben, alineados abajo: lo más
-      // reciente queda siempre visible, como en un terminal real.
-      const int visibles = (term_h - TERM_PAD) / TERM_CH;
-      const int total = (int)term_lineas_.size();
-      const int desde = total > visibles ? total - visibles : 0;
-      const int maxc = (term_w - TERM_PAD) / TERM_CW;
-      SDL_SetRenderDrawColor(ren, 180, 220, 180, 255);
-      int ly = y + TERM_PAD / 2;
-      for (int i = desde; i < total; i++) {
-        const std::string& linea = term_lineas_[(size_t)i];
-        int lx = term_x + TERM_PAD / 2;
-        for (int c = 0; c < (int)linea.size() && c < maxc; c++) {
-          draw_glyph(ren, lx, ly, linea[(size_t)c], TERM_SCALE);
-          lx += TERM_CW;
+      dibujar_terminal(ren, &term);
+      y += term_h + 8;
+
+      // Indicador de scrollback (solo si hay historial): cuántas líneas hay
+      // guardadas por arriba, para saber que se ha perdido vista.
+      if (!term_.historial().empty()) {
+        char linea[64];
+        std::snprintf(linea, sizeof linea, "scrollback: %zu lineas",
+                      term_.historial().size());
+        SDL_SetRenderDrawColor(ren, 110, 125, 145, 255);
+        const int maxc = (panel_w_ - 2 * PANEL_MARGEN) / TERM_CW;
+        for (int c = 0; linea[c] && c < maxc; c++) {
+          draw_glyph(ren, term_x, y, linea[c], TERM_SCALE);
         }
-        ly += TERM_CH;
       }
     }
   }

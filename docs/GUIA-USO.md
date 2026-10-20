@@ -179,6 +179,8 @@ pantalla sin intervención humana**.
 | `/screen.png` | PNG | Captura exacta de lo que saldría por HDMI (320×240) |
 | `/screen.png?scale=2` | PNG | La misma captura ampliada ×2, ×3 o ×4 (útil para leer texto) |
 | `/screen.ppm` | PPM | La misma imagen sin comprimir (P6), para herramientas sin decodificador PNG |
+| `/console.txt` | texto | Pantalla de la **consola** (80×24), tal como la interpreta el terminal |
+| `/console.png` | PNG | Captura de la consola (640×384), con sus colores ANSI y glifos CP437 |
 | `/vram.txt` | texto | Tilemap, atributos y OAM en hexadecimal + vista ASCII 40×30 |
 | `/vram.json` | JSON | Lo mismo que `/vram.txt` pero estructurado, para procesarlo con código |
 | `/state.txt` | texto | CPU/UART, LEDs, Core de Vídeo y registros del SID |
@@ -199,6 +201,16 @@ Guardar una captura desde la línea de comandos:
 curl -o pantalla.png http://localhost:8080/screen.png
 curl -o pantalla_grande.png "http://localhost:8080/screen.png?scale=2"
 ```
+
+Capturar la **consola** de un programa de texto (Tetris, editor, menús):
+
+```bash
+curl http://localhost:8080/console.txt          # 80x24 en texto plano
+curl -o consola.png "http://localhost:8080/console.png?scale=2"
+```
+
+`/console.txt` es lo más útil para un agente: permite comprobar qué está
+mostrando un programa de terminal sin abrir la ventana ni interpretar imágenes.
 
 Leer el estado del sistema:
 
@@ -836,85 +848,68 @@ SID ($D400-$D41F):
 
 #### Terminal del UART en la ventana
 
-En la parte baja del panel lateral, la ventana muestra un **terminal** con la
-salida del UART: exactamente lo mismo que saldría por PuTTY. Sirve para depurar
-sin cambiar de ventana (cargar un binario, ver un listado, leer mensajes del
-programa).
+La consola del panel es un **emulador de terminal** de verdad (80x24), no un
+volcado de texto. Refleja la salida del UART como lo vería PuTTY, con colores y
+glifos de caja.
 
-##### ¿Se ve igual que en PuTTY?
+##### Qué interpreta
 
-**El texto es el mismo; la presentación no.** Diferencias, y por qué:
+| Secuencia | Efecto |
+|---|---|
+| `CR` `LF` `BS` `TAB` | Control de línea habitual |
+| `ESC[H` / `ESC[f` | Posicionar el cursor (fila;columna) |
+| `ESC[A/B/C/D` | Mover el cursor arriba/abajo/derecha/izquierda |
+| `ESC[G` | Columna concreta |
+| `ESC[J` / `ESC[K` | Borrar pantalla / borrar línea (modos 0, 1, 2) |
+| `ESC[X` | Borrar N caracteres |
+| `ESC[<n>m` | Colores 30-37/40-47/90-97/100-107, negrita, inverso, `38;5;n` |
+| `ESC[?25l/h` | Ocultar / mostrar cursor |
 
-| Aspecto | PuTTY | Terminal de la ventana |
-|---|---|---|
-| Texto y orden | sí | **idéntico** (mismo flujo de bytes) |
-| Ancho | 80 columnas por omisión, configurable | hasta **80 columnas** (se estrecha si la pantalla no da) |
-| Alto | scrollback ilimitado | tantas líneas como quepan, las **últimas** |
-| Saltos de línea | CR/LF | CR/LF, BS, DEL y ESC aplicados como en una consola tonta |
-| Colores ANSI | sí | **no** (este firmware no emite secuencias ANSI) |
-| Cursor parpadeante | sí | no |
-| Seleccionar / copiar | sí | no |
-| Entrada de teclado | sí | no (es de solo lectura; para escribir usa PuTTY) |
-| Scroll hacia atrás | sí | no |
+Lo que no interpreta (no lo usa este firmware): regiones de scroll, ratón,
+consultas de estado del cursor y ANSI de 24 bits (se aproxima a 16 colores).
 
-El ancho lo negocia el propio panel: intenta **80 columnas** descontando la
-placa de LEDs; si la pantalla no da para eso con el vídeo, reduce el vídeo a ×2
-y, si aún no cabe, estrecha la consola (mínimo 24 columnas). Las líneas más
-largas que el panel se cortan por la derecha, nunca se parten.
+##### CP437: los bloques y marcos
 
-La celda es de **8×8 px** (`TERM_SCALE = 1` en `emu_window.h`): el tamaño nativo
-de la fuente, que es lo que más se parece a una consola real. Si la prefieres
-más grande, cambia `TERM_SCALE` a 2 (y el panel se ensanchará el doble para las
-mismas columnas).
+Los bytes `0x80`-`0xFF` **no se descartan**: se dibujan con la tabla **CP437**,
+la misma que usa la consola de DOS y PuTTY en modo DOS. Por eso se ven los
+marcos `│ ─ ┌ ┐ └ ┘ ═ ║`, los bloques `█ ▓ ▒ ░` y los acentos `á é í ñ`.
 
-##### Cómo se interpretan los bytes
+La fuente está en `src/terminal/font_cp437.h` (256 glifos de 8x16, generada por
+`tools/gen_font_cp437.py`). **No hay UTF-8**: el UART mueve bytes sueltos y este
+sistema usa CP437, como se ha comprobado en los binarios reales (Tetris, editor).
 
-El texto se construye en `Uart::tap_push()` (`src/uart.cpp`) imitando una
-consola tonta, que es lo que necesita este firmware:
+##### Geometría y scrollback
 
-- `\r` vuelve a la columna 0 y `\n` baja de línea (se aplican por separado: el
-  monitor manda `CR LF`, pero también hay CR sueltos).
-- **0x08 (BS) y 0x7F (DEL)** borran el carácter a la izquierda. El monitor usa
-  `BS + espacio + BS` al editar la línea; sin esto quedaban caracteres fantasma.
-- **0x1B (ESC)** descarta la línea en curso. El monitor manda `ESC + 'H'` para
-  empezar la entrada limpia.
-- **`\t`** se expande a espacios hasta el siguiente múltiplo de 8.
-- **Bytes > 0x7F se descartan.**
+- La rejilla es **fija de 80x24**, lo que asumen los programas del sistema.
+- Lo que sale por arriba se guarda en un **historial** (`TerminalState::historial()`),
+  hasta 1000 líneas. La ventana muestra el número de líneas guardadas.
+- La ventana crece en alto lo necesario para que quepan las 24 filas.
 
-##### ¿Y Unicode?
+##### Solo lectura
 
-**No hay Unicode en este sistema, ni en el hardware ni en el cable.**
+La consola **nunca escribe hacia la emulación**:
 
-- La fuente del Core de Vídeo (`src/video/font_c64.h`) tiene **96 glifos ASCII**
-  (`$20`-`$7F`). No existen acentos ni símbolos fuera de ese rango.
-- El monitor del FPGA manda **solo ASCII**: se ha comprobado con `rom/monitor.bin`
-  (128 cadenas, todas ASCII; ningún byte > 0x7F en el bloque de textos).
-- El UART transmite **bytes sueltos**, no UTF-8. Si un programa tuyo mandara
-  texto UTF-8 (p. ej. `ñ` = `0xC3 0xB1`), PuTTY en modo Raw mostraría basura y
-  el terminal de la ventana descarta esos bytes, mostrando solo el ASCII.
+- Observa los bytes que la CPU ya transmitió, **sin consumir** la FIFO. PuTTY
+  sigue recibiendo lo mismo si está conectado.
+- No hay teclado hacia la consola: las teclas son del joystick y de F11.
+- No hay `enqueue_rx` desde la ventana.
 
-Si algún día quieres acentos, hay que **ampliar la fuente del FPGA** (añadir
-una tabla `$80`-`$FF` en `video.vhd`) y mapear bytes en ese rango; entonces
-bastaría con pintarlos aquí también. Mientras tanto, escribe solo ASCII.
-
-##### Probarlo sin abrir la ventana
-
-Hay una prueba del comportamiento del terminal que no necesita SDL:
+##### Capturarla
 
 ```bash
-make test
+curl http://localhost:8080/console.txt                   # 80x24 en texto
+curl -o consola.png "http://localhost:8080/console.png?scale=2"
 ```
 
-Comprueba CRLF, backspace, ESC, CR solo, bytes altos, tab, DEL y que la FIFO de
-transmisión (la que va a PuTTY) queda intacta.
+##### Probarlo
 
-##### Quitar el panel lateral
-
-Para dejar la ventana solo con vídeo, cambia en `src/main.cpp`:
-
-```cpp
-window.start(Video::W, Video::H, 3, /*terminal=*/false);
+```bash
+make test                     # pruebas del intérprete (no necesitan SDL)
+./test_terminal.exe ROM.bin   # además interpreta un binario y muestra el resultado
 ```
+
+`make test` cubre CRLF, `ED`/`EL`/`ECH`, SGR, cursor, scroll, CP437, secuencias
+desconocidas, TAB/BS y auto-wrap.
 
 #### Añadir módulos al panel lateral
 

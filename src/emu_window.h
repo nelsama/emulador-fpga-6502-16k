@@ -4,6 +4,8 @@
 #include <string>
 #include <vector>
 
+#include "terminal/terminal_state.h"
+
 // Ventana del emulador: vídeo del Core de Vídeo + panel lateral de depuración.
 //
 // Disposición:
@@ -62,10 +64,9 @@ public:
     port1_dir_ = dir;
   }
 
-  // Texto a mostrar en el panel del terminal (solo si se abrió con terminal).
-  // `lineas` son las últimas líneas de la salida del UART, de la más antigua a
-  // la más reciente. Se copia internamente.
-  void set_terminal(const std::string& lineas);
+  // Estado del terminal (80x24) que refleja la salida del UART. Se copia una
+  // vez por fotograma: Main lo actualiza desde Uart::terminal().
+  void set_terminal(const TerminalState& term) { term_ = term; }
   bool has_terminal() const { return terminal_; }
 
   // Atiende los eventos: cierra la ventana o actualiza el joystick.
@@ -89,11 +90,13 @@ private:
   // texto resulta demasiado grande y se come el ancho del vídeo.
   static constexpr int TERM_SCALE = 1;
   static constexpr int TERM_CW = 8 * TERM_SCALE;   // ancho de celda en píxeles
-  static constexpr int TERM_CH = 8 * TERM_SCALE;   // alto de celda en píxeles
-  // Columnas que se muestran: 80, el ancho clásico de una consola de 80x24 y el
-  // que usa PuTTY por omisión. El panel se ensancha para que quepan.
-  static constexpr int TERM_COLS = 80;
+  static constexpr int TERM_CH = 16 * TERM_SCALE;  // alto de celda (fuente CP437 8x16)
+  // Geometría de la consola: 80x24, lo que asumen los programas del sistema.
+  static constexpr int TERM_COLS = TerminalState::COLS;
   static constexpr int TERM_PAD = 8;      // margen interior
+
+  // Dibuja la rejilla del terminal dentro de un rectángulo.
+  void dibujar_terminal(void* renderer, const void* caja);
 
   // Pantalla completa: el vídeo se ajusta a lo máximo que quepa con la
   // proporción de 320x240; el panel lateral no cambia de tamaño.
@@ -120,7 +123,7 @@ private:
   // Geometría de la ventana antes de pasar a pantalla completa, para
   // restaurarla al salir.
   int win_x_ = 0, win_y_ = 0, win_w_ = 0, win_h_ = 0;
-  std::vector<std::string> term_lineas_; // últimos renglones del UART
+  TerminalState term_;            // estado del terminal (80x24)
   uint8_t joy_ = 0xF8; // en reposo: todo a 1 (activo en bajo)
   // Estado de cada fuente por separado, para combinarlas sin que una borre a
   // la otra (ver la nota en emu_window.cpp).

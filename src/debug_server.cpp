@@ -9,6 +9,7 @@
 
 #include "bus.h"
 #include "debug_dump.h"
+#include "uart.h"
 #include "video/video.h"
 
 #ifdef _WIN32
@@ -392,6 +393,37 @@ void DebugServer::build_response(Conn& /*c*/, const std::string& head) {
     v->render(fb.data());
     resp_.type = "image/x-portable-pixmap";
     debug_dump::screenshot_ppm_mem(fb.data(), Video::W, Video::H, resp_.body);
+
+  } else if (path == "/console.txt") {
+    // Pantalla de la consola (80x24) tal como la interpreta el terminal del
+    // panel: útil para que un agente compruebe qué está mostrando un programa
+    // de texto sin abrir la ventana.
+    if (Uart* u = bus_->uart()) {
+      resp_.type = "text/plain; charset=us-ascii";
+      resp_.body = u->terminal().a_texto();
+    } else {
+      resp_.status = "503 Service Unavailable";
+      resp_.body = "sin UART\n";
+    }
+
+  } else if (path == "/console.png") {
+    // Captura de la consola, con colores y glifos CP437, como la ve el usuario.
+    if (Uart* u = bus_->uart()) {
+      int scale = 1;
+      const size_t sq = query.find("scale=");
+      if (sq != std::string::npos) {
+        const int s = atoi(query.c_str() + sq + 6);
+        if (s >= 1 && s <= 4) scale = s;
+      }
+      std::vector<uint32_t> px;
+      int W = 0, H = 0;
+      u->terminal().a_imagen(&px, &W, &H);
+      resp_.type = "image/png";
+      debug_dump::screenshot_png_mem(px.data(), W, H, scale, resp_.body);
+    } else {
+      resp_.status = "503 Service Unavailable";
+      resp_.body = "sin UART\n";
+    }
 
   } else if (path == "/vram.txt") {
     if (Video* v = bus_->video()) {

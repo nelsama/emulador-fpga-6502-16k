@@ -48,7 +48,7 @@ RESIDFP_SRCS := \
   $(RESIDFP_DIR)/version.cc \
   $(RESIDFP_DIR)/resample/SincResampler.cpp
 
-SRCS := $(wildcard src/*.cpp) $(wildcard src/video/*.cpp) $(RESIDFP_SRCS)
+SRCS := $(wildcard src/*.cpp) $(wildcard src/video/*.cpp) $(wildcard src/terminal/*.cpp) $(RESIDFP_SRCS)
 OBJS := $(patsubst %.cpp,%.o,$(patsubst %.cc,%.o,$(SRCS)))
 DEPS := $(OBJS:.o=.d)
 BIN  := emulador.exe
@@ -71,18 +71,18 @@ run: $(BIN)
 	./$(BIN) rom/monitor.bin 4000 tarjeta.img
 
 # Pruebas rápidas (no necesitan SDL ni abrir ventana).
-test: test_uart_tap.exe
-	./test_uart_tap.exe
+test: test_terminal.exe
+	./test_terminal.exe
 
-test_uart_tap.exe: tools/test_uart_tap.cpp src/uart.cpp src/uart.h src/device.h
-	$(CXX) -std=c++17 -O2 -Wall -Isrc -o $@ tools/test_uart_tap.cpp src/uart.cpp
+test_terminal.exe: tools/test_terminal.cpp src/terminal/terminal_state.cpp src/terminal/terminal_state.h src/terminal/font_cp437.h
+	$(CXX) -std=c++17 -O2 -Wall -Isrc -o $@ tools/test_terminal.cpp src/terminal/terminal_state.cpp
 
 info:
 	@echo "SDL2: $(SDL2_FOUND) (1=audio/video habilitados)"
 	@echo "SDL2_PREFIX: $(SDL2_PREFIX)"
 
 clean:
-	rm -f $(OBJS) $(DEPS) $(BIN) test_uart_tap.exe
+	rm -f $(OBJS) $(DEPS) $(BIN) test_terminal.exe
 
 rebuild: clean all
 
