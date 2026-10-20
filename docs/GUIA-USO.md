@@ -775,12 +775,15 @@ reduce la escala del vídeo a ×2 automáticamente; el panel lateral nunca baja.
 | Pantalla completa | **F11** o **Alt+Intro** (sin barra de título ni bordes) |
 | Volver al tamaño original | Botón restaurar, o **F11** si estabas a pantalla completa |
 
-En los tres casos **solo se amplía el vídeo**: el panel lateral conserva su
-tamaño (400 px) y su posición a la izquierda, y la consola no gana ni pierde
-caracteres. El vídeo se escala al **mayor factor entero** que quepa en el
-espacio libre (en un 1080p suele ser ×3 o ×4) y se centra en ese hueco, con
-16 px de separación del panel. Si no cabe a escala entera, se estira
-manteniendo la proporción 4:3 (sin deformar).
+En pantalla completa **solo se amplía el vídeo**, y lo mismo en ventana: el
+panel lateral conserva su tamaño (el justo para 80 columnas de consola) y
+**todo el ancho restante es para el vídeo**, que se escala al mayor factor
+entero que quepa (×2, ×3, ×4…). En una pantalla 1536×864 sale ×3 (960×720). Si
+no cabe a escala entera, se estira manteniendo la proporción 4:3 (sin
+deformar).
+
+La ventana arranca ocupando el ancho útil del escritorio y el alto necesario
+para las 24 filas de consola, sin salirse de la pantalla.
 
 La ventana tiene un tamaño mínimo igual al de arranque, así que no se puede
 encoger hasta aplastar el panel.

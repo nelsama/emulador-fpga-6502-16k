@@ -182,35 +182,57 @@ bool EmuWindow::start(int video_w, int video_h, int scale, bool terminal) {
 
   // Reparto del ancho de pantalla entre panel y vídeo.
   //
-  // Prioridad: que la consola muestre 80 columnas (lo comparable con PuTTY)
-  // sin comerse el vídeo. Si no caben las dos cosas, primero se baja la
-  // escala del vídeo a x2 y después, si aún no cabe, se estrecha la consola
-  // hasta el mínimo de la placa. (Después de SDL_InitSubSystem: antes no hay
-  // modo de vídeo consultable.)
+  // El panel se lleva lo justo para que quepan las 80 columnas de la consola
+  // (o menos si la pantalla es estrecha) y TODO el resto es para el vídeo, que
+  // se escala al mayor factor entero que quepa. Así el Core de Vídeo ocupa el
+  // máximo posible.
+  int ancho_ventana = w_ * scale_ + panel_w_;
+  int alto_ventana = h_ * scale_;
+
   {
     SDL_Rect usable{0, 0, 0, 0};
     if (SDL_GetDisplayUsableBounds(0, &usable) == 0 &&
         usable.w > 0 && usable.h > 0) {
       // Margen para el borde de la ventana y el redondeo del DPI.
       const int margen = 40;
-      while (scale_ > 2 &&
-             (w_ * scale_ + panel_w_ + margen > usable.w ||
-              h_ * scale_ + 120 > usable.h)) {
-        scale_--;
+
+      // 1. El panel, como mucho, lo que ocupa el 80% del ancho: el vídeo
+      //    siempre debe quedar con sitio.
+      const int panel_max = (usable.w - margen) * 8 / 10;
+      if (terminal_ && panel_w_ > panel_max) {
+        // Se recortan columnas completas, no píxeles a medias.
+        int cols = (panel_max - 2 * PANEL_MARGEN - TERM_PAD) / TERM_CW;
+        if (cols < 24) cols = 24;
+        panel_w_ = cols * TERM_CW + 2 * PANEL_MARGEN + TERM_PAD;
       }
-      if (terminal_) {
-        const int libre = usable.w - w_ * scale_ - margen;
-        if (libre < panel_w_) {
-          // Se recortan columnas completas, no píxeles a medias: así el texto
-          // se corta siempre por una columna entera.
-          int cols = (libre - 2 * PANEL_MARGEN - TERM_PAD) / TERM_CW;
-          if (cols < 24) cols = 24;
-          panel_w_ = cols * TERM_CW + 2 * PANEL_MARGEN + TERM_PAD;
-          if (panel_w_ < PANEL_W_MIN) panel_w_ = PANEL_W_MIN;
-        }
-      }
+
+      // 2. La ventana arranca ocupando el ancho de la pantalla (sin pasarse),
+      //    para que el vídeo se vea grande desde el principio.
+      ancho_ventana = usable.w - margen;
+      if (ancho_ventana < w_ * scale_ + panel_w_) ancho_ventana = w_ * scale_ + panel_w_;
+      if (ancho_ventana > usable.w) ancho_ventana = usable.w;
     }
   }
+
+  // Alto: el necesario para que quepan el panel y sus 24 filas de consola.
+  // Sin esto, la rejilla se corta por abajo cuando el vídeo es bajo.
+  const int panel_alto = 12 + 46 + 6 + (30 + 12 + 8 * FILA_P1 + 4) + 6 +
+                         TerminalState::ROWS * TERM_CH + 2 * TERM_PAD + 12;
+  if (alto_ventana < panel_alto) alto_ventana = panel_alto;
+
+  // No pasarse de la pantalla: con la barra de tareas y el DPI escalado, una
+  // ventana más alta que el escritorio deja parte del vídeo fuera.
+  {
+    SDL_Rect usable{0, 0, 0, 0};
+    if (SDL_GetDisplayUsableBounds(0, &usable) == 0 && usable.h > 0) {
+      // 80 px: barra de tareas (~40 con DPI 125%) + barra de título. Necesita
+      // margen de sobra porque SDL devuelve el escritorio completo, no el área
+      // libre real.
+      const int max_alto = usable.h - 100;
+      if (max_alto > panel_alto && alto_ventana > max_alto) alto_ventana = max_alto;
+    }
+  }
+
   // Mandos del PC: si no hay ninguno, SDL simplemente no genera eventos. Se
   // inicializa aparte para que un fallo no impida abrir la ventana.
   if (SDL_InitSubSystem(SDL_INIT_GAMECONTROLLER) != 0) {
@@ -222,16 +244,10 @@ bool EmuWindow::start(int video_w, int video_h, int scale, bool terminal) {
     std::printf("Mandos disponibles: %d\n", SDL_NumJoysticks());
   }
 
-  // Alto necesario para el panel: placa + puerto 1 + consola completa (80x24).
-  // Sin esto, la rejilla se corta por abajo cuando el vídeo es bajo.
-  const int panel_alto = 12 + 46 + 6 + (30 + 12 + 8 * FILA_P1 + 4) + 6 +
-                         TerminalState::ROWS * TERM_CH + 2 * TERM_PAD + 12;
-  const int alto_ventana = (h_ * scale_ > panel_alto) ? h_ * scale_ : panel_alto;
-
   SDL_Window* win = SDL_CreateWindow(
       "Emulador FPGA 6502 - Tang Nano 9K",
       SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-      w_ * scale_ + panel_w_, alto_ventana,
+      ancho_ventana, alto_ventana,
       SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE);
   if (!win) {
     std::fprintf(stderr, "video: SDL_CreateWindow fallo: %s\n", SDL_GetError());
@@ -240,7 +256,7 @@ bool EmuWindow::start(int video_w, int video_h, int scale, bool terminal) {
   // Tamano minimo: el panel lateral y el video a la escala calculada. Asi el
   // boton de maximizar (y el arrastre de bordes) siempre amplian el video y
   // nunca aplastan el panel.
-  SDL_SetWindowMinimumSize(win, w_ * scale_ + panel_w_, alto_ventana);
+  SDL_SetWindowMinimumSize(win, panel_w_ + w_ / 2, alto_ventana);
 
   SDL_Renderer* ren = SDL_CreateRenderer(win, -1, SDL_RENDERER_ACCELERATED);
   if (!ren) ren = SDL_CreateRenderer(win, -1, SDL_RENDERER_SOFTWARE);
@@ -387,41 +403,39 @@ void EmuWindow::present(const uint32_t* rgb, uint8_t leds) {
 
   // --- Vídeo (columna derecha) ---
   //
-  // En ventana va a su escala normal (×scale_, 1 px de emulador = N px).
-  // Si el usuario agranda la ventana a mano o la maximiza (botón de Windows),
-  // el panel lateral NO cambia: es el vídeo el que se amplía hasta llenar el
-  // sitio. Igual a pantalla completa.
+  // Ocupa TODO el espacio libre a la derecha del panel: se escala al mayor
+  // factor entero que quepa (píxeles cuadrados, como en el FPGA) y se centra
+  // en lo que sobra. Solo se estira sin mantener el factor entero cuando la
+  // ventana es tan pequeña que ni ×1 cabe. Nunca se deja "a su escala base":
+  // si hay sitio, se usa.
   int out_w = 0, out_h = 0;
   SDL_GetRendererOutputSize(ren, &out_w, &out_h);
 
   SDL_Rect vdst;
   {
-    const int available_w = out_w - panel_w_ - VIDEO_PAD;
+    // Sin margen entre el panel y el vídeo: el separador del panel ya marca
+    // la frontera y así el vídeo gana esos píxeles.
+    const int available_w = out_w - panel_w_;
     const int available_h = out_h;
-    const int base_w = w_ * scale_;
-    const int base_h = h_ * scale_;
-    if (fullscreen_ || available_w > base_w + 8 || available_h > base_h + 8) {
-      // Hay sitio de sobra: se escala al mayor factor entero que quepa (píxeles
-      // cuadrados, como en el FPGA) y se centra en la zona libre.
-      int f = available_w / w_;
-      if (f * h_ > available_h) f = available_h / h_;
-      if (f < 1) {
-        // No cabe a escala entera: se estira manteniendo la proporción 4:3.
-        const double fx = (double)available_w / w_;
-        const double fy = (double)available_h / h_;
-        const double fmin = fx < fy ? fx : fy;
-        const int vw = (int)(w_ * fmin);
-        const int vh = (int)(h_ * fmin);
-        vdst = SDL_Rect{panel_w_ + VIDEO_PAD + (available_w - vw) / 2,
-                        (available_h - vh) / 2, vw, vh};
-      } else {
-        const int vw = w_ * f;
-        const int vh = h_ * f;
-        vdst = SDL_Rect{panel_w_ + VIDEO_PAD + (available_w - vw) / 2,
-                        (available_h - vh) / 2, vw, vh};
-      }
+    if (available_w <= 0 || available_h <= 0) return;
+
+    int f = available_w / w_;      // factor entero por ancho
+    if (f * h_ > available_h) f = available_h / h_;  // y por alto
+
+    if (f < 1) {
+      // No cabe ni a tamaño real: se ajusta manteniendo la proporción 4:3.
+      const double fx = (double)available_w / w_;
+      const double fy = (double)available_h / h_;
+      const double fmin = fx < fy ? fx : fy;
+      const int vw = (int)(w_ * fmin);
+      const int vh = (int)(h_ * fmin);
+      vdst = SDL_Rect{panel_w_ + (available_w - vw) / 2, (available_h - vh) / 2,
+                      vw, vh};
     } else {
-      vdst = SDL_Rect{panel_w_, 0, base_w, base_h};
+      const int vw = w_ * f;
+      const int vh = h_ * f;
+      vdst = SDL_Rect{panel_w_ + (available_w - vw) / 2, (available_h - vh) / 2,
+                      vw, vh};
     }
   }
   SDL_RenderCopy(ren, tex, nullptr, &vdst);
