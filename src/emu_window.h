@@ -57,10 +57,19 @@ public:
 
   bool active() const { return active_; }
 
+  // Alterna entre ventana y pantalla completa (F11 o Alt+Intro).
+  // El panel lateral mantiene su tamaño; el que se amplía es el vídeo.
+  void toggle_fullscreen();
+  bool fullscreen() const { return fullscreen_; }
+
   // Estado actual del joystick en el formato del puerto 1 (activo en bajo).
   uint8_t joy() const { return joy_; }
 
 private:
+  // Pantalla completa: el vídeo se ajusta a lo máximo que quepa con la
+  // proporción de 320x240; el panel lateral no cambia de tamaño.
+  void poll_alt_enter();
+
   // Ancho del panel lateral, en píxeles de ventana. Con terminal a ×2 cabe
   // ~24 columnas de la fuente 8x8 escalada x2, que es lo que mide el monitor
   // del firmware. Es fijo para que no baile con cada línea de texto.
@@ -75,6 +84,10 @@ private:
   int scale_ = 3;
   int panel_w_ = 0;               // ancho del panel lateral (0 = sin panel)
   bool terminal_ = false;         // módulo del terminal activado
+  bool fullscreen_ = false;       // ventana vs pantalla completa
+  // Geometría de la ventana antes de pasar a pantalla completa, para
+  // restaurarla al salir.
+  int win_x_ = 0, win_y_ = 0, win_w_ = 0, win_h_ = 0;
   std::vector<std::string> term_lineas_; // últimos renglones del UART
   uint8_t joy_ = 0xF8; // en reposo: todo a 1 (activo en bajo)
   // Estado de cada fuente por separado, para combinarlas sin que una borre a

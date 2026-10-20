@@ -706,6 +706,7 @@ los bits 0-2 al escribir `$C002`.
 |---|---|---|
 | Mover | Cursores o **WASD** | Stick izquierdo o cruceta |
 | Fuego | **Espacio**, Z, Ctrl izq. o Intro | A, B, X, Y, hombros o gatillos |
+| Pantalla completa | **F11** o Alt+Intro | — |
 
 Las dos fuentes **conviven**: si mantienes una dirección con el mando y pulsas
 otra tecla, ambas cuentan; soltar una no anula la otra. Cualquier mando que
@@ -745,6 +746,26 @@ La ventana tiene dos zonas:
 
 Si la ventana no cabe en la pantalla (1366×768, portátiles con DPI alto), se
 reduce la escala del vídeo a ×2 automáticamente; el panel lateral nunca baja.
+
+#### Pantalla completa
+
+| Acción | Tecla |
+|---|---|
+| Entrar / salir de pantalla completa | **F11** o **Alt+Intro** |
+
+En pantalla completa **solo se amplía el vídeo**: el panel lateral conserva su
+tamaño (400 px) y su posición a la izquierda. El vídeo se escala al **mayor
+factor entero** que quepa en el espacio libre (en una pantalla 1080p suele ser
+×3 o ×4) y se centra en la zona libre, con 16 px de separación del panel. Si no
+cabe a escala entera, se estira manteniendo la proporción 4:3 (sin deformar).
+
+Al salir se restaura la geometría exacta de la ventana (tamaño y posición).
+
+Para arrancar ya en pantalla completa (lanzadores, scripts):
+
+```bash
+EMU_FULLSCREEN=1 ./run.sh
+```
 
 #### LEDs
 

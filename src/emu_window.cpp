@@ -86,6 +86,9 @@ static constexpr int TERM_CH = 8 * 2;   // alto de celda en píxeles
 static constexpr int TERM_COLS = 24;    // columnas visibles
 static constexpr int TERM_PAD = 10;     // margen interior
 
+// Separación entre el panel lateral y la zona del vídeo (pantalla completa).
+static constexpr int VIDEO_PAD = 16;
+
 void draw_glyph(SDL_Renderer* r, int x, int y, char c) {
   // La fuente cubre ASCII desde $20. Lo no imprimible se pinta como espacio.
   const int idx = ((unsigned char)c) - 0x20;
@@ -197,6 +200,9 @@ bool EmuWindow::start(int video_w, int video_h, int scale, bool terminal) {
   texture_ = tex;
   active_ = true;
   joy_ = Gpio::JOY_IDLE;
+  // Arranque directo en pantalla completa (útil para lanzadores y pruebas:
+  // EMU_FULLSCREEN=1). F11/Alt+Intro lo alternan en marcha.
+  if (std::getenv("EMU_FULLSCREEN")) toggle_fullscreen();
   std::printf("Video: ventana %dx%d (escala %dx)%s\n", w_, h_, scale_,
               terminal_ ? " + panel lateral: LEDs y terminal UART" : "");
   std::printf("Joystick (puerto 1): cursores o WASD para mover, Espacio/Z/Ctrl para fuego."
@@ -231,6 +237,50 @@ void EmuWindow::set_terminal(const std::string& lineas) {
   }
 }
 
+void EmuWindow::toggle_fullscreen() {
+#ifdef HAVE_SDL2
+  if (!active_ || !window_) return;
+  SDL_Window* win = static_cast<SDL_Window*>(window_);
+  fullscreen_ = !fullscreen_;
+  if (fullscreen_) {
+    // Se guarda la geometría para restaurarla al salir.
+    SDL_GetWindowPosition(win, &win_x_, &win_y_);
+    SDL_GetWindowSize(win, &win_w_, &win_h_);
+    SDL_Rect usable{0, 0, 0, 0};
+    SDL_GetDisplayUsableBounds(0, &usable);
+    SDL_SetWindowBordered(win, SDL_FALSE);
+    SDL_SetWindowPosition(win, usable.x, usable.y);
+    SDL_SetWindowSize(win, usable.w, usable.h);
+    if (SDL_SetWindowFullscreen(win, SDL_WINDOW_FULLSCREEN_DESKTOP) != 0) {
+      std::fprintf(stderr, "video: pantalla completa fallo: %s\n", SDL_GetError());
+    }
+  } else {
+    SDL_SetWindowFullscreen(win, 0);
+    SDL_SetWindowBordered(win, SDL_TRUE);
+    SDL_SetWindowSize(win, win_w_, win_h_);
+    SDL_SetWindowPosition(win, win_x_, win_y_);
+  }
+  std::printf("Video: %s\n", fullscreen_ ? "pantalla completa (F11 para salir)" : "ventana");
+  std::fflush(stdout);
+#endif
+}
+
+void EmuWindow::poll_alt_enter() {
+#ifdef HAVE_SDL2
+  // Se detecta por estado de modificadores en vez de por evento para que
+  // funcione igual con cualquiera de los dos Alt.
+  static bool alt_enter_was = false;
+  const Uint8* ks = SDL_GetKeyboardState(nullptr);
+  const bool enter = ks[SDL_SCANCODE_KP_ENTER] || ks[SDL_SCANCODE_RETURN];
+  const bool alt = (ks[SDL_SCANCODE_LALT] || ks[SDL_SCANCODE_RALT]) != 0;
+  const bool now = alt && enter;
+  // No basta con `now`: con Alt pulsado, Intro también dispara el fuego en
+  // este emulador, así que se exige flanco y Alt para no duplicar.
+  if (now && !alt_enter_was) toggle_fullscreen();
+  alt_enter_was = now;
+#endif
+}
+
 void EmuWindow::present(const uint32_t* rgb, uint8_t leds) {
 #ifdef HAVE_SDL2
   if (!active_) return;
@@ -244,8 +294,47 @@ void EmuWindow::present(const uint32_t* rgb, uint8_t leds) {
   SDL_RenderClear(ren);
 
   // --- Vídeo (columna derecha) ---
-  SDL_Rect vdst{panel_w_, 0, w_ * scale_, h_ * scale_};
+  //
+  // En ventana va a su escala normal (×scale_, 1 px de emulador = N px).
+  // A pantalla completa se escala lo máximo posible manteniendo la proporción
+  // y la zona de vídeo se centra en lo que queda a la derecha del panel.
+  SDL_Rect vdst;
+  if (fullscreen_) {
+    int ow = 0, oh = 0;
+    SDL_GetRendererOutputSize(ren, &ow, &oh);
+    const int aw = ow - panel_w_ - VIDEO_PAD;   // ancho disponible
+    const int ah = oh;
+    if (aw <= 0 || ah <= 0) return;
+    // Factor entero siempre que quepa (píxeles cuadrados, como en el FPGA).
+    // El margen VIDEO_PAD separa el vídeo del panel lateral y de los bordes.
+    int f = aw / w_;
+    if (f < 1) f = 1;
+    if (f * h_ > ah) f = ah / h_;
+    if (f < 1) {
+      // No cabe a escala entera: se estira manteniendo la proporción.
+      const double fx = (double)aw / w_;
+      const double fy = (double)ah / h_;
+      const double fmin = fx < fy ? fx : fy;
+      const int vw = (int)(w_ * fmin);
+      const int vh = (int)(h_ * fmin);
+      vdst = SDL_Rect{panel_w_ + VIDEO_PAD + (aw - vw) / 2, (ah - vh) / 2, vw, vh};
+    } else {
+      const int vw = w_ * f;
+      const int vh = h_ * f;
+      vdst = SDL_Rect{panel_w_ + VIDEO_PAD + (aw - vw) / 2, (ah - vh) / 2, vw, vh};
+    }
+  } else {
+    vdst = SDL_Rect{panel_w_, 0, w_ * scale_, h_ * scale_};
+  }
   SDL_RenderCopy(ren, tex, nullptr, &vdst);
+
+  // Alto útil del panel: el de la ventana, o el de la pantalla a fullscreen.
+  int area_h = h_ * scale_;
+  {
+    int ow = 0, oh = 0;
+    SDL_GetRendererOutputSize(ren, &ow, &oh);
+    if (oh > 0) area_h = oh;
+  }
 
   // --- Panel lateral izquierdo ---
   //
@@ -254,13 +343,13 @@ void EmuWindow::present(const uint32_t* rgb, uint8_t leds) {
   // calcular su rectángulo a partir de `y` y restar su alto, que es lo que se
   // hace aquí con la placa de LEDs y el terminal.
   if (panel_w_ > 0) {
-    SDL_Rect panel{0, 0, panel_w_, h_ * scale_};
+    SDL_Rect panel{0, 0, panel_w_, area_h};
     SDL_SetRenderDrawColor(ren, 34, 37, 43, 255);
     SDL_RenderFillRect(ren, &panel);
 
     // Separador vertical entre el panel y el vídeo.
     SDL_SetRenderDrawColor(ren, 52, 57, 66, 255);
-    SDL_RenderDrawLine(ren, panel_w_ - 1, 0, panel_w_ - 1, h_ * scale_);
+    SDL_RenderDrawLine(ren, panel_w_ - 1, 0, panel_w_ - 1, area_h);
 
     int y = 12; // cursor vertical dentro del panel
 
@@ -284,7 +373,7 @@ void EmuWindow::present(const uint32_t* rgb, uint8_t leds) {
 
     // --- Módulo 2: terminal del UART ---
     if (terminal_) {
-      const int alto_total = h_ * scale_;
+      const int alto_total = area_h;
       const int term_h = alto_total - y - 12; // hasta el borde inferior
       const int term_x = 8;
       const int term_w = panel_w_ - 16;
@@ -322,6 +411,10 @@ bool EmuWindow::poll() {
 #ifdef HAVE_SDL2
   if (!active_) return true;
 
+  // Alt+Intro tambien alterna pantalla completa (costumbre en visores).
+  // SDL_GetModState se consulta al vuelo para no depender del orden de eventos.
+  poll_alt_enter();
+
   // Se parte del estado combinado anterior y se actualiza con los eventos de
   // esta vuelta. Así no se pierden pulsaciones que sigan activas.
   static Entrada in;
@@ -348,6 +441,11 @@ bool EmuWindow::poll() {
           // Fuego: Espacio, Z, Ctrl izquierdo o Intro.
           case SDLK_SPACE: case SDLK_z: in.set(t, Gpio::JOY_FIRE, down);     break;
           case SDLK_LCTRL: case SDLK_RETURN: in.set(t, Gpio::JOY_FIRE, down); break;
+          // Pantalla completa. Solo afecta a la ventana: el panel lateral
+          // conserva su tamaño y es el vídeo el que se amplía.
+          case SDLK_F11:
+            if (down) toggle_fullscreen();
+            break;
           default: break;
         }
         break;
