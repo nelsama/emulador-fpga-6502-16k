@@ -735,17 +735,21 @@ La ventana tiene dos zonas:
 
 ```
 +---------------------------+-------------------------------+
-| PANEL LATERAL             |                               |
+| PANEL DE DEPURACIÓN       |                               |
 |  [ placa Tang Nano 9K ]   |                               |
 |  [    6 LEDs          ]   |      vídeo 320x240 x N        |
+|  [ puerto 1 (pines)   ]   |                               |
 |  [ terminal del UART  ]   |                               |
 +---------------------------+-------------------------------+
 ```
 
-- **Izquierda (400 px):** el "banco de trabajo" de depuración. Arriba la placa
-  con sus 6 LEDs; debajo, el terminal del UART. Está pensado para ir apilando
-  **más módulos** (registros del SID, volcado de VRAM, etc.) sin tocar el vídeo.
+- **Izquierda:** el "banco de trabajo" de depuración. Arriba la placa con sus
+  6 LEDs; debajo, el estado de los pines del puerto 1; por último, el terminal
+  del UART. Los módulos se apilan, así que añadir otro es dibujarlo debajo.
 - **Derecha:** el framebuffer del Core de Vídeo, escalado ×N y alineado arriba.
+
+Todo el panel es de **solo lectura**: refleja el estado de la máquina, nunca
+manda nada hacia la emulación.
 
 Si la ventana no cabe en la pantalla (1366×768, portátiles con DPI alto), se
 reduce la escala del vídeo a ×2 automáticamente; el panel lateral nunca baja.
@@ -777,6 +781,41 @@ Para arrancar ya en pantalla completa (lanzadores, scripts):
 ```bash
 EMU_FULLSCREEN=1 ./run.sh
 ```
+
+#### Pines del puerto 1 en el panel
+
+Entre los LEDs y la consola, el panel muestra el **estado de los 8 pines del
+puerto 1** en el orden del registro (bit 7 arriba). Es la misma información que
+la tabla de `/state.txt`, pero siempre visible:
+
+```
+PUERTO 1 - JOYSTICK (DB9)
+bit pin senal   modo nivel
+ 7  29  fuego   IN   ●
+ 6  30  arriba  IN   ●
+ 5  33  abajo   IN   ●
+ 4  34  izq     IN   ●
+ 3  40  der     IN   ●
+ 2  35  --      OUT  ○
+ 1  41  --      OUT  ○
+ 0  42  --      OUT  ○
+```
+
+- **pin**: número de patilla en el Tang Nano 9K (de `6502_board.cst`).
+- **senal**: nombre de la señal del joystick; `--` para los bits que no usa.
+- **modo**: `IN` si el programa configuró el bit como entrada (`$C002`), `OUT`
+  si no. El joystick solo funciona con `IN`.
+- **nivel**: relleno = 1, hueco = 0. En el joystick **0 = pulsado** (activo en
+  bajo), así que el indicador azul claro es "suelto" y el ámbar **"pulsado"**.
+
+Si los bits 3-7 no están como entrada aparece el aviso
+**`bits 3-7 no son entrada (falta joy_init)`** en ámbar: el programa leerá 0 en
+el puerto y el joystick no responderá (es el error más común al integrar el
+mando).
+
+Es información de **solo lectura**: se toma de `port1_read()` (lo que ve la CPU)
+
+y `dir1()`, en el mismo fotograma que se pinta.
 
 #### LEDs
 
@@ -822,6 +861,11 @@ El ancho lo negocia el propio panel: intenta **80 columnas** descontando la
 placa de LEDs; si la pantalla no da para eso con el vídeo, reduce el vídeo a ×2
 y, si aún no cabe, estrecha la consola (mínimo 24 columnas). Las líneas más
 largas que el panel se cortan por la derecha, nunca se parten.
+
+La celda es de **8×8 px** (`TERM_SCALE = 1` en `emu_window.h`): el tamaño nativo
+de la fuente, que es lo que más se parece a una consola real. Si la prefieres
+más grande, cambia `TERM_SCALE` a 2 (y el panel se ensanchará el doble para las
+mismas columnas).
 
 ##### Cómo se interpretan los bytes
 
@@ -1038,7 +1082,7 @@ src/
   sid.h/.cpp           SID sobre reSIDfp $D400-$D41F
   gpio_uart.h/.cpp     GPIO $C000-$C003 (joystick + LEDs)
   audio.h/.cpp         salida de audio SDL2 (ring buffer + colchón)
-  emu_window.h/.cpp    ventana: vídeo escalado + panel lateral (LEDs, terminal UART)
+  emu_window.h/.cpp    ventana: vídeo escalado + panel lateral (LEDs, puerto 1, terminal UART)
   tcp_server.h/.cpp    UART <-> socket TCP
   debug_server.h/.cpp  servidor HTTP de depuración
   debug_dump.h/.cpp    PNG sin dependencias + volcados de texto

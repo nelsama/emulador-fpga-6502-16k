@@ -9,14 +9,23 @@
 // Disposición:
 //
 //   +---------------------------+-------------------------------+
-//   | PANEL LATERAL             |                               |
-//   |  [ placa + 6 LEDs ]       |      vídeo 320x240 x N        |
+//   | PANEL DE DEPURACIÓN       |                               |
+//   |  [ placa + 6 LEDs ]       |                               |
+//   |  [ puerto 1 (pines) ]     |      vídeo 320x240 x N        |
 //   |  [ terminal del UART  ]   |                               |
 //   +---------------------------+-------------------------------+
 //
-// El panel lateral sirve de "banco de trabajo": hoy lleva la placa (6 LEDs,
-// los usa por ejemplo el SID player como VU meter) y el terminal del UART, y
-// está pensado para ir añadiendo módulos apilados debajo.
+// El panel lateral sirve de "banco de trabajo": los módulos se apilan de
+// arriba abajo y se dibujan con un cursor vertical, de modo que añadir uno
+// nuevo es dibujarlo en su rectángulo y avanzar ese cursor. Hoy lleva:
+//   1. la placa del Tang Nano 9K con sus 6 LEDs (el SID player los usa como
+//      VU meter),
+//   2. el estado de los pines del puerto 1 (joystick Atari, DB9),
+//   3. el terminal del UART.
+//
+// Todo el panel es de SOLO LECTURA: refleja el estado de la máquina, no se
+// escribe nada hacia la emulación desde aquí (la entrada sigue siendo el
+// teclado/el mando para el joystick).
 //
 // Entrada: simula el joystick Atari (DB9) conectado al puerto 1 del FPGA.
 // Admite dos fuentes a la vez:
@@ -45,6 +54,14 @@ public:
   // (alfa ignorado). `leds` es el estado de los 6 LEDs en los bits 0-5.
   void present(const uint32_t* rgb, uint8_t leds);
 
+  // Estado del puerto 1 para el módulo de pines del panel (solo lectura).
+  // `valor` es lo que lee la CPU en $C000 y `dir` la máscara de dirección
+  // (bit a 1 = entrada). Se usan los mismos datos que muestra /state.txt.
+  void set_port1(uint8_t valor, uint8_t dir) {
+    port1_valor_ = valor;
+    port1_dir_ = dir;
+  }
+
   // Texto a mostrar en el panel del terminal (solo si se abrió con terminal).
   // `lineas` son las últimas líneas de la salida del UART, de la más antigua a
   // la más reciente. Se copia internamente.
@@ -66,13 +83,17 @@ public:
   uint8_t joy() const { return joy_; }
 
 private:
-  // Celda del terminal: la fuente 8x8 del Core de Vídeo escalada x2.
-  static constexpr int TERM_CW = 8 * 2;   // ancho de celda en píxeles
-  static constexpr int TERM_CH = 8 * 2;   // alto de celda en píxeles
+  // Celda del terminal: la fuente 8x8 del Core de Vídeo escalada TERM_SCALE.
+  // Se deja a x1 (8x8 px, el tamaño nativo de la fuente): es lo que más se
+  // parece a una consola real y permite 80 columnas en solo 640 px. Con x2 el
+  // texto resulta demasiado grande y se come el ancho del vídeo.
+  static constexpr int TERM_SCALE = 1;
+  static constexpr int TERM_CW = 8 * TERM_SCALE;   // ancho de celda en píxeles
+  static constexpr int TERM_CH = 8 * TERM_SCALE;   // alto de celda en píxeles
   // Columnas que se muestran: 80, el ancho clásico de una consola de 80x24 y el
   // que usa PuTTY por omisión. El panel se ensancha para que quepan.
   static constexpr int TERM_COLS = 80;
-  static constexpr int TERM_PAD = 10;     // margen interior
+  static constexpr int TERM_PAD = 8;      // margen interior
 
   // Pantalla completa: el vídeo se ajusta a lo máximo que quepa con la
   // proporción de 320x240; el panel lateral no cambia de tamaño.
@@ -81,7 +102,7 @@ private:
   // Ancho mínimo del panel lateral, en píxeles de ventana. El ancho real se
   // calcula en start() para que quepan TERM_COLS columnas de texto; este valor
   // es el mínimo (el que necesita la placa de LEDs).
-  static constexpr int PANEL_W_MIN = 400;
+  static constexpr int PANEL_W_MIN = 300;
 
   bool active_ = false;
   void* window_ = nullptr;
@@ -93,6 +114,9 @@ private:
   int panel_w_ = 0;               // ancho del panel lateral (0 = sin panel)
   bool terminal_ = false;         // módulo del terminal activado
   bool fullscreen_ = false;       // ventana vs pantalla completa
+  // Último estado del puerto 1 (lo pone main.cpp en cada fotograma).
+  uint8_t port1_valor_ = 0xF8;
+  uint8_t port1_dir_ = 0x00;
   // Geometría de la ventana antes de pasar a pantalla completa, para
   // restaurarla al salir.
   int win_x_ = 0, win_y_ = 0, win_w_ = 0, win_h_ = 0;

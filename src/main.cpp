@@ -418,6 +418,8 @@ int main(int argc, char** argv) {
         const auto t_draw0 = clock::now();
         bus.video()->render(framebuffer);
         if (window.has_terminal()) window.set_terminal(uart.tap_text());
+        // Pines del puerto 1 tal como los lee la CPU (mismo dato que /state.txt).
+        window.set_port1(bus.gpio()->port1_read(), bus.gpio()->dir1());
         window.present(framebuffer, bus.gpio()->leds());
         draw_ms = std::chrono::duration<double, std::milli>(clock::now() - t_draw0).count();
       }

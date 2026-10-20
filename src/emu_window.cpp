@@ -89,8 +89,12 @@ void draw_led(SDL_Renderer* r, int cx, int cy, int radius, bool on) {
 // Separación entre el panel lateral y la zona del vídeo (pantalla completa).
 static constexpr int VIDEO_PAD = 16;
 
-void draw_glyph(SDL_Renderer* r, int x, int y, char c) {
+// Margen lateral de los módulos del panel y caja del terminal.
+static constexpr int PANEL_MARGEN = 8;
+
+void draw_glyph(SDL_Renderer* r, int x, int y, char c, int f) {
   // La fuente cubre ASCII desde $20. Lo no imprimible se pinta como espacio.
+  // `f` es el factor de escala de cada píxel del glifo.
   const int idx = ((unsigned char)c) - 0x20;
   if (idx < 0 || idx >= 96) return;
   for (int row = 0; row < 8; row++) {
@@ -98,7 +102,7 @@ void draw_glyph(SDL_Renderer* r, int x, int y, char c) {
     if (!bits) continue;
     for (int col = 0; col < 8; col++) {
       if (!(bits & (0x80 >> col))) continue;
-      SDL_Rect px{x + col * 2, y + row * 2, 2, 2};
+      SDL_Rect px{x + col * f, y + row * f, f, f};
       SDL_RenderFillRect(r, &px);
     }
   }
@@ -138,7 +142,7 @@ bool EmuWindow::start(int video_w, int video_h, int scale, bool terminal) {
   // se compara con PuTTY, así que la consola manda sobre la placa de LEDs.
   panel_w_ = 0;
   if (terminal_) {
-    const int necesario = TERM_COLS * TERM_CW + 2 * 8 + TERM_PAD;
+    const int necesario = TERM_COLS * TERM_CW + 2 * PANEL_MARGEN + TERM_PAD;
     panel_w_ = necesario > PANEL_W_MIN ? necesario : PANEL_W_MIN;
   }
 
@@ -151,7 +155,7 @@ bool EmuWindow::start(int video_w, int video_h, int scale, bool terminal) {
   //
   // Prioridad: que la consola muestre 80 columnas (lo comparable con PuTTY)
   // sin comerse el vídeo. Si no caben las dos cosas, primero se baja la
-  // escala del vídeo a ×2 y después, si aún no cabe, se estrecha la consola
+  // escala del vídeo a x2 y después, si aún no cabe, se estrecha la consola
   // hasta el mínimo de la placa. (Después de SDL_InitSubSystem: antes no hay
   // modo de vídeo consultable.)
   {
@@ -170,9 +174,9 @@ bool EmuWindow::start(int video_w, int video_h, int scale, bool terminal) {
         if (libre < panel_w_) {
           // Se recortan columnas completas, no píxeles a medias: así el texto
           // se corta siempre por una columna entera.
-          int cols = (libre - 2 * 8 - TERM_PAD) / TERM_CW;
+          int cols = (libre - 2 * PANEL_MARGEN - TERM_PAD) / TERM_CW;
           if (cols < 24) cols = 24;
-          panel_w_ = cols * TERM_CW + 2 * 8 + TERM_PAD;
+          panel_w_ = cols * TERM_CW + 2 * PANEL_MARGEN + TERM_PAD;
           if (panel_w_ < PANEL_W_MIN) panel_w_ = PANEL_W_MIN;
         }
       }
@@ -395,14 +399,106 @@ void EmuWindow::present(const uint32_t* rgb, uint8_t leds) {
     for (int i = 0; i < 6; i++) {
       draw_led(ren, first_x + i * spacing, cy, radius, (leds >> i) & 1);
     }
-    y += board_h + 14;
+    y += board_h + 10;
 
-    // --- Módulo 2: terminal del UART ---
+    // --- Módulo 2: pines del puerto 1 (joystick Atari / DB9) ---
+    //
+    // Se listan los 8 bits en orden descendente (bit 7 arriba), que es como se
+    // lee el registro: así coincide con la tabla de /state.txt y con el orden
+    // físico del conector. El número de pin es el del FPGA (6502_board.cst).
+    // Todo es estado del hardware: modo (entrada/salida) y nivel (1/0).
+    {
+      struct Fila { int bit; int pin; const char* senal; };
+      // Pines del puerto 1, por bit.
+      static const int kPinP1[8] = {42, 41, 35, 40, 34, 33, 30, 29};
+      static const Fila filas[8] = {
+          {7, 29, "fuego"}, {6, 30, "arriba"}, {5, 33, "abajo"}, {4, 34, "izq"},
+          {3, 40, "der"},   {2, 35, "--"},     {1, 41, "--"},    {0, 42, "--"},
+      };
+      (void)kPinP1;
+
+      // Aviso si el programa no ha configurado los bits 3-7 como entrada.
+      const bool aviso = (port1_dir_ & 0xF8) != 0xF8;
+
+      const int alto_modulo = (aviso ? 34 : 24) + 16 + 8 * 18 + 8; // título + cabecera + filas
+      const int mx = PANEL_MARGEN;
+      const int mw = panel_w_ - 2 * PANEL_MARGEN;
+      SDL_Rect mod{mx, y, mw, alto_modulo};
+      fill_round_rect(ren, mod, 6, SDL_Color{24, 28, 34, 255});
+      SDL_SetRenderDrawColor(ren, 44, 50, 60, 255);
+      SDL_RenderDrawRect(ren, &mod);
+
+      // Título del módulo.
+      SDL_SetRenderDrawColor(ren, 120, 140, 165, 255);
+      const char* titulo = "PUERTO 1 - JOYSTICK (DB9)";
+      for (int c = 0; titulo[c]; c++) {
+        draw_glyph(ren, mx + 10 + c * TERM_CW, y + 7, titulo[c], TERM_SCALE);
+      }
+
+      // Cabecera de columnas (si hay ancho para ello).
+      if (aviso) {
+        SDL_SetRenderDrawColor(ren, 230, 170, 90, 255);
+        const char* w = "bits 3-7 no son entrada (falta joy_init)";
+        const int maxc = (mw - 20) / TERM_CW;
+        for (int c = 0; w[c] && c < maxc; c++) {
+          draw_glyph(ren, mx + 10 + c * TERM_CW, y + 20, w[c], TERM_SCALE);
+        }
+      }
+
+      // Columnas: bit | pin | señal | modo | nivel (bolita).
+      const int y0 = y + (aviso ? 34 : 24);
+      SDL_SetRenderDrawColor(ren, 200, 210, 225, 255);
+      static const char* kCab = "bit pin senal   modo nivel";
+      for (int c = 0; kCab[c]; c++) {
+        draw_glyph(ren, mx + 10 + c * TERM_CW, y0, kCab[c], TERM_SCALE);
+      }
+
+      const int xcol = mx + 10;
+      const int cw = TERM_CW;
+      for (int i = 0; i < 8; i++) {
+        const Fila& f = filas[i];
+        const int ly = y0 + 16 + i * 18;
+        const bool entrada = (port1_dir_ >> f.bit) & 1;
+        const bool nivel = (port1_valor_ >> f.bit) & 1;
+        const bool es_joy = f.bit >= 3;
+
+        // Texto de la fila. Se compone con snprintf para no repetir código.
+        char linea[64];
+        std::snprintf(linea, sizeof linea, "%d   %2d  %-7s %-6s", f.bit, f.pin,
+                      f.senal, entrada ? "IN" : "OUT");
+        // Gris para los bits que no son del joystick; claro para los usados.
+        if (es_joy) SDL_SetRenderDrawColor(ren, 200, 215, 230, 255);
+        else        SDL_SetRenderDrawColor(ren, 110, 120, 135, 255);
+        for (int c = 0; linea[c]; c++) {
+          draw_glyph(ren, xcol + c * cw, ly, linea[c], TERM_SCALE);
+        }
+
+        // Indicador de nivel: círculo relleno = 1, hueco = 0.
+        const int bx = xcol + 23 * cw;
+        const int by = ly + 4;
+        if (nivel) {
+          // Verde si es una entrada del joystick sin pulsar (activo en bajo),
+          // ámbar si está pulsada (bit a 0).
+          if (es_joy && entrada && !nivel) SDL_SetRenderDrawColor(ren, 255, 170, 60, 255);
+          else SDL_SetRenderDrawColor(ren, 90, 220, 140, 255);
+          fill_circle(ren, bx, by, 5);
+        } else {
+          SDL_SetRenderDrawColor(ren, 60, 70, 84, 255);
+          fill_circle(ren, bx, by, 5);
+          SDL_SetRenderDrawColor(ren, 20, 24, 30, 255);
+          fill_circle(ren, bx, by, 3);
+        }
+      }
+
+      y += alto_modulo + 12;
+    }
+
+    // --- Módulo 3: terminal del UART ---
     if (terminal_) {
       const int alto_total = area_h;
       const int term_h = alto_total - y - 12; // hasta el borde inferior
-      const int term_x = 8;
-      const int term_w = panel_w_ - 16;
+      const int term_x = PANEL_MARGEN;
+      const int term_w = panel_w_ - 2 * PANEL_MARGEN;
       SDL_Rect term{term_x, y, term_w, term_h};
       SDL_SetRenderDrawColor(ren, 10, 14, 12, 255);
       SDL_RenderFillRect(ren, &term);
@@ -421,7 +517,7 @@ void EmuWindow::present(const uint32_t* rgb, uint8_t leds) {
         const std::string& linea = term_lineas_[(size_t)i];
         int lx = term_x + TERM_PAD / 2;
         for (int c = 0; c < (int)linea.size() && c < maxc; c++) {
-          draw_glyph(ren, lx, ly, linea[(size_t)c]);
+          draw_glyph(ren, lx, ly, linea[(size_t)c], TERM_SCALE);
           lx += TERM_CW;
         }
         ly += TERM_CH;
