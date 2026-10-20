@@ -82,10 +82,9 @@ void draw_led(SDL_Renderer* r, int cx, int cy, int radius, bool on) {
 // (src/video/font_c64.h) y se pinta glifo a glifo, escalada x2 (16x16 px por
 // carácter). El panel es de solo lectura: muestra lo mismo que sale por el
 // socket, para depurar sin cambiar a PuTTY.
-static constexpr int TERM_CW = 8 * 2;   // ancho de celda en píxeles
-static constexpr int TERM_CH = 8 * 2;   // alto de celda en píxeles
-static constexpr int TERM_COLS = 24;    // columnas visibles
-static constexpr int TERM_PAD = 10;     // margen interior
+//
+// TERM_CW/TERM_CH/TERM_COLS/TERM_PAD viven en emu_window.h: start() los usa
+// para dimensionar el panel.
 
 // Separación entre el panel lateral y la zona del vídeo (pantalla completa).
 static constexpr int VIDEO_PAD = 16;
@@ -135,26 +134,47 @@ bool EmuWindow::start(int video_w, int video_h, int scale, bool terminal) {
   scale_ = scale;
   terminal_ = terminal;
   // Panel lateral: presente si hay algo que poner en él (ahora, el terminal).
-  panel_w_ = terminal_ ? PANEL_W : 0;
+  // El ancho se ajusta para que quepan TERM_COLS columnas de texto: es lo que
+  // se compara con PuTTY, así que la consola manda sobre la placa de LEDs.
+  panel_w_ = 0;
+  if (terminal_) {
+    const int necesario = TERM_COLS * TERM_CW + 2 * 8 + TERM_PAD;
+    panel_w_ = necesario > PANEL_W_MIN ? necesario : PANEL_W_MIN;
+  }
 
   if (SDL_InitSubSystem(SDL_INIT_VIDEO) != 0) {
     std::fprintf(stderr, "video: SDL_InitSubSystem fallo: %s\n", SDL_GetError());
     return false;
   }
 
-  // Con el panel lateral la ventana es más ancha; si no cabe en pantallas
-  // pequeñas (1366x768, portátiles con DPI alto) se reduce la escala del vídeo.
-  // (Después de SDL_InitSubSystem: antes no hay modo de vídeo consultable.)
+  // Reparto del ancho de pantalla entre panel y vídeo.
+  //
+  // Prioridad: que la consola muestre 80 columnas (lo comparable con PuTTY)
+  // sin comerse el vídeo. Si no caben las dos cosas, primero se baja la
+  // escala del vídeo a ×2 y después, si aún no cabe, se estrecha la consola
+  // hasta el mínimo de la placa. (Después de SDL_InitSubSystem: antes no hay
+  // modo de vídeo consultable.)
   {
     SDL_Rect usable{0, 0, 0, 0};
     if (SDL_GetDisplayUsableBounds(0, &usable) == 0 &&
         usable.w > 0 && usable.h > 0) {
-      // Nunca por debajo de ×2: se vería peor que el original. Márgenes para
-      // la barra de título, la de tareas y el redondeo del DPI.
+      // Margen para el borde de la ventana y el redondeo del DPI.
+      const int margen = 40;
       while (scale_ > 2 &&
-             (w_ * scale_ + panel_w_ + 40 > usable.w ||
+             (w_ * scale_ + panel_w_ + margen > usable.w ||
               h_ * scale_ + 120 > usable.h)) {
         scale_--;
+      }
+      if (terminal_) {
+        const int libre = usable.w - w_ * scale_ - margen;
+        if (libre < panel_w_) {
+          // Se recortan columnas completas, no píxeles a medias: así el texto
+          // se corta siempre por una columna entera.
+          int cols = (libre - 2 * 8 - TERM_PAD) / TERM_CW;
+          if (cols < 24) cols = 24;
+          panel_w_ = cols * TERM_CW + 2 * 8 + TERM_PAD;
+          if (panel_w_ < PANEL_W_MIN) panel_w_ = PANEL_W_MIN;
+        }
       }
     }
   }

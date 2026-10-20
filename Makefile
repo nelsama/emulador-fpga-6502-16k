@@ -53,7 +53,7 @@ OBJS := $(patsubst %.cpp,%.o,$(patsubst %.cc,%.o,$(SRCS)))
 DEPS := $(OBJS:.o=.d)
 BIN  := emulador.exe
 
-.PHONY: all run clean rebuild info
+.PHONY: all run test clean rebuild info
 
 all: $(BIN)
 
@@ -70,12 +70,19 @@ $(BIN): $(OBJS)
 run: $(BIN)
 	./$(BIN) rom/monitor.bin 4000 tarjeta.img
 
+# Pruebas rápidas (no necesitan SDL ni abrir ventana).
+test: test_uart_tap.exe
+	./test_uart_tap.exe
+
+test_uart_tap.exe: tools/test_uart_tap.cpp src/uart.cpp src/uart.h src/device.h
+	$(CXX) -std=c++17 -O2 -Wall -Isrc -o $@ tools/test_uart_tap.cpp src/uart.cpp
+
 info:
 	@echo "SDL2: $(SDL2_FOUND) (1=audio/video habilitados)"
 	@echo "SDL2_PREFIX: $(SDL2_PREFIX)"
 
 clean:
-	rm -f $(OBJS) $(DEPS) $(BIN)
+	rm -f $(OBJS) $(DEPS) $(BIN) test_uart_tap.exe
 
 rebuild: clean all
 

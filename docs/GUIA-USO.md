@@ -802,21 +802,71 @@ salida del UART: exactamente lo mismo que saldría por PuTTY. Sirve para depurar
 sin cambiar de ventana (cargar un binario, ver un listado, leer mensajes del
 programa).
 
-Cómo funciona:
+##### ¿Se ve igual que en PuTTY?
 
-- Es un **tap de solo lectura** sobre el transmisor (`Uart::tap_text()`). No
-  consume la FIFO de transmisión, así que **PuTTY sigue recibiendo** los mismos
-  bytes si está conectado. Es solo un espejo.
-- Los caracteres de control no se pintan: `\r` se descarta y `\n` abre línea.
-  Si el programa hace movimiento de cursor (`ESC[...`) no se interpreta; para
-  eso está PuTTY.
-- Se muestran tantas líneas como quepan (las **últimas**, alineadas abajo): lo
-  más reciente está siempre visible, como en un terminal real. Las líneas más
-  largas que el panel se cortan por la derecha.
-- La fuente es la del Core de Vídeo (`src/video/font_c64.h`), escalada ×2, lo
-  que da ~24 columnas de ancho.
+**El texto es el mismo; la presentación no.** Diferencias, y por qué:
 
-Para quitar el panel lateral (ventana solo con vídeo), cambia en `src/main.cpp`:
+| Aspecto | PuTTY | Terminal de la ventana |
+|---|---|---|
+| Texto y orden | sí | **idéntico** (mismo flujo de bytes) |
+| Ancho | 80 columnas por omisión, configurable | hasta **80 columnas** (se estrecha si la pantalla no da) |
+| Alto | scrollback ilimitado | tantas líneas como quepan, las **últimas** |
+| Saltos de línea | CR/LF | CR/LF, BS, DEL y ESC aplicados como en una consola tonta |
+| Colores ANSI | sí | **no** (este firmware no emite secuencias ANSI) |
+| Cursor parpadeante | sí | no |
+| Seleccionar / copiar | sí | no |
+| Entrada de teclado | sí | no (es de solo lectura; para escribir usa PuTTY) |
+| Scroll hacia atrás | sí | no |
+
+El ancho lo negocia el propio panel: intenta **80 columnas** descontando la
+placa de LEDs; si la pantalla no da para eso con el vídeo, reduce el vídeo a ×2
+y, si aún no cabe, estrecha la consola (mínimo 24 columnas). Las líneas más
+largas que el panel se cortan por la derecha, nunca se parten.
+
+##### Cómo se interpretan los bytes
+
+El texto se construye en `Uart::tap_push()` (`src/uart.cpp`) imitando una
+consola tonta, que es lo que necesita este firmware:
+
+- `\r` vuelve a la columna 0 y `\n` baja de línea (se aplican por separado: el
+  monitor manda `CR LF`, pero también hay CR sueltos).
+- **0x08 (BS) y 0x7F (DEL)** borran el carácter a la izquierda. El monitor usa
+  `BS + espacio + BS` al editar la línea; sin esto quedaban caracteres fantasma.
+- **0x1B (ESC)** descarta la línea en curso. El monitor manda `ESC + 'H'` para
+  empezar la entrada limpia.
+- **`\t`** se expande a espacios hasta el siguiente múltiplo de 8.
+- **Bytes > 0x7F se descartan.**
+
+##### ¿Y Unicode?
+
+**No hay Unicode en este sistema, ni en el hardware ni en el cable.**
+
+- La fuente del Core de Vídeo (`src/video/font_c64.h`) tiene **96 glifos ASCII**
+  (`$20`-`$7F`). No existen acentos ni símbolos fuera de ese rango.
+- El monitor del FPGA manda **solo ASCII**: se ha comprobado con `rom/monitor.bin`
+  (128 cadenas, todas ASCII; ningún byte > 0x7F en el bloque de textos).
+- El UART transmite **bytes sueltos**, no UTF-8. Si un programa tuyo mandara
+  texto UTF-8 (p. ej. `ñ` = `0xC3 0xB1`), PuTTY en modo Raw mostraría basura y
+  el terminal de la ventana descarta esos bytes, mostrando solo el ASCII.
+
+Si algún día quieres acentos, hay que **ampliar la fuente del FPGA** (añadir
+una tabla `$80`-`$FF` en `video.vhd`) y mapear bytes en ese rango; entonces
+bastaría con pintarlos aquí también. Mientras tanto, escribe solo ASCII.
+
+##### Probarlo sin abrir la ventana
+
+Hay una prueba del comportamiento del terminal que no necesita SDL:
+
+```bash
+make test
+```
+
+Comprueba CRLF, backspace, ESC, CR solo, bytes altos, tab, DEL y que la FIFO de
+transmisión (la que va a PuTTY) queda intacta.
+
+##### Quitar el panel lateral
+
+Para dejar la ventana solo con vídeo, cambia en `src/main.cpp`:
 
 ```cpp
 window.start(Video::W, Video::H, 3, /*terminal=*/false);

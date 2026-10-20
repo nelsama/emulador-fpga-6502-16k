@@ -66,14 +66,22 @@ public:
   uint8_t joy() const { return joy_; }
 
 private:
+  // Celda del terminal: la fuente 8x8 del Core de Vídeo escalada x2.
+  static constexpr int TERM_CW = 8 * 2;   // ancho de celda en píxeles
+  static constexpr int TERM_CH = 8 * 2;   // alto de celda en píxeles
+  // Columnas que se muestran: 80, el ancho clásico de una consola de 80x24 y el
+  // que usa PuTTY por omisión. El panel se ensancha para que quepan.
+  static constexpr int TERM_COLS = 80;
+  static constexpr int TERM_PAD = 10;     // margen interior
+
   // Pantalla completa: el vídeo se ajusta a lo máximo que quepa con la
   // proporción de 320x240; el panel lateral no cambia de tamaño.
   void poll_alt_enter();
 
-  // Ancho del panel lateral, en píxeles de ventana. Con terminal a ×2 cabe
-  // ~24 columnas de la fuente 8x8 escalada x2, que es lo que mide el monitor
-  // del firmware. Es fijo para que no baile con cada línea de texto.
-  static constexpr int PANEL_W = 400;
+  // Ancho mínimo del panel lateral, en píxeles de ventana. El ancho real se
+  // calcula en start() para que quepan TERM_COLS columnas de texto; este valor
+  // es el mínimo (el que necesita la placa de LEDs).
+  static constexpr int PANEL_W_MIN = 400;
 
   bool active_ = false;
   void* window_ = nullptr;

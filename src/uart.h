@@ -20,6 +20,7 @@
 // El divisor por defecto es 58 (115200 @ 6.75 MHz).
 class Uart : public Device {
 public:
+public:
   Uart();
 
   bool decodes(uint16_t addr) const override;
@@ -41,7 +42,7 @@ public:
   size_t tap_pending() const { return tap_.size(); }
   uint8_t tap_pop();          // saca el siguiente byte pendiente (0 si no hay)
   const std::string& tap_text() const { return tap_text_; }
-  void tap_clear() { tap_.clear(); tap_text_.clear(); }
+  void tap_clear() { tap_.clear(); tap_text_.clear(); tap_col_ = 0; tap_line_start_ = 0; }
 
   // Entrada desde el host (PuTTY). Si RX_VALID ya estaba activo, marca overrun.
   void enqueue_rx(uint8_t v);
@@ -74,10 +75,14 @@ private:
 
   // Flujo observado para el terminal de la ventana (ver tap_pending()).
   std::deque<uint8_t> tap_;
-  std::string tap_text_;      // últimas líneas, ya con el formato del terminal
+  std::string tap_text_;      // lo que pinta el terminal, con '\n' por renglón
+  int tap_col_ = 0;           // columna del cursor dentro de la línea actual
+  size_t tap_line_start_ = 0; // índice en tap_text_ donde empieza esa línea
   static constexpr size_t TAP_MAX = 64 * 1024;   // tope por si nadie lo vacía
   static constexpr size_t TAP_TEXT_MAX = 32 * 1024;
   void tap_push(uint8_t v);   // alimenta el tap (lo llama write de TX)
+  void tap_escribir(char c);  // pone un carácter en la posición del cursor
+  void tap_linea_nueva();
 
   // Control / baudrate
   bool     tx_irq_en_ = false;
