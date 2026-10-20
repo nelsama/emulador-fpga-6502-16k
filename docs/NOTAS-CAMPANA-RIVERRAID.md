@@ -249,45 +249,26 @@ recibiendo peticiones HTTP.
 Si el emulador desaparece, **antes de investigar**: lanzarlo desacoplado y ver si
 sigue ocurriendo. Detalle en `PROCEDIMIENTOS.md` §8.
 
-## 7. Segundo bug (sin corregir): la captura mezcla la VRAM de dos instantes
+## 7. Nota historica: "la captura mezcla dos instantes" (RESUELTO)
 
-Tras el parche de scroll, probado otra vez con River Raid: **sigue igual y en el
-GAME OVER es mas evidente**.
+Esta seccion se escribio antes de la revision del emulador y **sus conclusiones
+son incorrectas**. Se conserva solo como registro de lo observado:
 
-Que se ve (captura de `/screen.png`, 320x240):
+- Se veia el panel de GAME OVER partido en dos zonas separadas ~180 px, con
+  texto y franja verde arriba y panel negro cortado abajo.
+- Se atribuyo a una lectura no atomica de la VRAM en `render()` (copiar
+  `tilemap_`/`attrib_` antes de pintar).
 
-- banda de ~40 px arriba con el texto del GAME OVER ("FIRE/R = reintentar",
-  "Q = salir") sobre el rio, y una franja verde encima;
-- el panel negro del GAME OVER cortado a la mitad, la otra mitad abajo;
-- en partida normal, el HUD no cuadra con el cauce.
+**Estado real:** era el bug de `render()` leyendo la VRAM viva, ya **corregido**
+con la instantanea al entrar (ver tabla de "Bugs del emulador encontrados en
+esta revision"). Tambien eran falsas las dos notas de metodo que se dieron
+aqui:
 
-Un panel escrito en las filas 11-16 del tilemap aparece en DOS zonas separadas
-~180 lineas. Un solo buffer con scroll normal no produce eso: la captura esta
-mezclando contenido de instantes distintos mientras recorre el mapa.
+| Afirmacion de esta seccion | Realidad |
+|---|---|
+| "`?scale=` se ignora; la captura sale a 320x240" | Falso: funciona (x1..x4) |
+| "Las peticiones HTTP congelan el core" | Falso: eran el interbloqueo de cierre y la resolucion IPv6 |
 
-Sospechas para quien lo arregle (todo en `src/video/video.cpp`, `render()`):
-
-1. **Lectura no atomica de la VRAM**: el tilemap y los atributos se leen celda
-   a celda dentro del bucle de pixeles. Si mientras se pinta el CPU escribe
-   (o si el hilo del emulador avanza), el mismo frame mezcla dos estados.
-   Copiar `tilemap_`, `attrib_` y `oam_` a un buffer local al principio de
-   `render()` y pintar desde la copia.
-2. **Bandas de raster**: con `raster0_`/`raster1_` cada banda usa scroll y
-   region distintas. En River Raid se fijan a `0xFF` (sin bandas), asi que si
-   aun asi se cambia de banda, la condicion de cambio esta mal. Recordar que
-   en el VHDL la banda MEDIA es la que usa el scroll global
-   (`sc_x_in/sc_y_in`) y las bandas 0/2 usan `band2_*`/`band3_*`.
-3. **Estado estatico entre frames**: comprobar que el parche de scroll no
-   deja acumuladores `static` (linea/linea anterior) que se arrastren de una
-   captura a otra: eso explicaria el salto de ~180 lineas (un panel que se
-   pinta a mitad de frame se "veria" partido segun cuando llega la peticion).
-
-Forma de comprobarlo sin el juego: pintar un patron de una sola fila
-horizontal distinta por cada fila del tilemap (32 colores/filas) y capturar con
-el CPU detenido. Si una fila sale dos veces o en posicion equivocada, es
-lectura no atomica o mezcla de bandas, no el juego.
-
-Nota de metodo: la captura vigente sale a 320x240 (el `?scale=` sigue sin
-efecto) y el menu de GAME OVER solo se pinta una vez, asi que la captura puede
-venir de un frame viejo; para diagnosticar hay que parar el core o leer
-`/vram.json` y `/screen.png` en la misma peticion.
+Moraleja para futuras campanas: si una captura parece mezclar dos frames,
+comprobar primero latencia y coherencia del servidor (seccion 3) antes de
+sospechar del juego.
