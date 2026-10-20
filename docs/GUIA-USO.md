@@ -77,6 +77,11 @@ make SDL2_PREFIX=C:/msys64/ucrt64
 
 `make` copia `SDL2.dll` junto al ejecutable automáticamente.
 
+> **Ejecutarlo desde un agente o un entorno sandeado:** el emulador necesita
+> red local (4000/8080), ventana SDL2 y audio. Dentro de un sandbox no funciona:
+> hay que lanzarlo **fuera del sandbox** y desacoplado del shell. Detalles en
+> [`GUIA-AGENTES.md`](GUIA-AGENTES.md#2-arranque-y-control).
+
 Otros objetivos: `make run`, `make test`, `make clean`, `make rebuild`.
 
 `make test` compila y ejecuta las pruebas del intérprete de terminal (no

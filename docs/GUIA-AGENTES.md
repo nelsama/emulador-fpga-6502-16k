@@ -39,6 +39,45 @@ python tools/emu_agent.py stop
 El servidor de depuración solo se activa con `run_debug.*` o `--debug`
 (`--debug=PUERTO` para otro puerto). Escucha en **`http://localhost:8080`**.
 
+### ⚠️ Hay que ejecutarlo FUERA del sandbox
+
+**El emulador no funciona dentro de un sandbox de ejecución.** No es un fallo
+del emulador: necesita cosas que un sandbox de terminal normalmente bloquea.
+
+| Necesita | Por qué | Qué pasa en el sandbox |
+|---|---|---|
+| **Red local** (sockets TCP) | UART en el puerto 4000 y HTTP de depuración en el 8080 | `bind`/`connect` fallan o no se puede conectar desde fuera |
+| **Ventana y contexto gráfico** (SDL2) | vídeo, consola y panel | `SDL_CreateWindow` falla o la ventana no aparece |
+| **Dispositivo de audio** (WASAPI) | SID | avisos de audio y sin sonido (el emulador sigue) |
+| **Proceso persistente** | el emulador corre hasta que se cierra | el shell lo mata al terminar la llamada |
+| **Escribir junto al .exe** | `SDL2.dll` y `tarjeta.img` | falla la copia o la apertura de la SD |
+
+**Consecuencia para un agente:** si el entorno de ejecución que usas está
+sandeado, lanza el emulador con **permisos fuera del sandbox** (unsandboxed),
+y a poder ser **desacoplado** del shell. Si no puedes, no sigas intentándolo:
+pidiendo una y otra vez el mismo comando solo se pierde tiempo. Las alternativas
+son:
+
+1. Pedir al usuario que lo lance (`run_debug.bat`) y trabajar solo con los
+   endpoints HTTP, que sí funcionan desde cualquier sitio.
+2. Usar `make test`, que **no** necesita SDL ni red (prueba el intérprete de
+   terminal).
+3. Usar herramientas puras de CPU, como `tools/diag_boot.cpp`, que se compilan
+   y ejecutan sin ventana.
+
+Cómo se pide según la herramienta que estés usando:
+
+| Entorno | Cómo |
+|---|---|
+| Herramientas tipo Zed / Cursor | marcar la llamada al terminal como **unsandboxed** (o "fuera del sandbox") y dar un motivo: *el emulador necesita red local y ventana* |
+| Docker | `--network host` (Linux) o publicar los puertos `-p 4000:4000 -p 8080:8080`; en Windows/macOS la ventana SDL2 no se ve dentro del contenedor |
+| WSL | funciona, pero la ventana necesita WSLg; los puertos son locales a WSL salvo que los redirijas |
+| Contenedor sin interfaz gráfica | compilar con `make` sin SDL: el emulador arranca **sin ventana** y el UART y el HTTP siguen sirviendo |
+
+> El síntoma típico de ESTAR sandeado: el proceso arranca, escribe las primeras
+> líneas y muere; o `curl localhost:8080` da *connection refused* aunque el
+> proceso exista.
+
 Para lanzarlo a mano (Windows), **desacoplado**:
 
 ```powershell
@@ -108,6 +147,7 @@ si los bits 3-7 no están en `entrada`, el programa no llamó a `joy_init()`.
 | Trampa | Qué pasa | Qué hacer |
 |---|---|---|
 | Lanzar con `(... &)` desde un shell | el proceso muere al cerrar el shell; **no es un fallo del emulador** | lanzar desacoplado (`Start-Process`, `setsid`, `emu_agent.py start`) |
+| **Lanzar dentro de un sandbox** | no hay red ni ventana: el emulador no arranca o no responde | ejecutarlo **fuera del sandbox** (ver §2) |
 | `emulador.exe` en ejecución | `make` falla con *Permission denied* al enlazar | cerrar el emulador antes de compilar |
 | Dos instancias abiertas | la segunda no abre el puerto 4000 y `connection refused` | comprobar con `tasklist` y cerrar las sobrantes |
 | Esperar salida antes de cargar | el monitor ya escribió su banner al arrancar | el banner se pierde si conectas tarde; usa `/console.txt` para el estado actual |

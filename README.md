@@ -71,6 +71,12 @@ Servidor HTTP que se activa con el lanzador **`run_debug.sh`** (o con
 
 En Windows: `run_debug.bat` (y `run.bat` sin depuración).
 
+> **Si lo lanzas desde un agente o un entorno sandeado:** el emulador necesita
+> red local (puertos 4000 y 8080), ventana y audio, así que hay que ejecutarlo
+> **fuera del sandbox** y **desacoplado** del shell. Dentro de un sandbox no
+> arranca o no responde. Ver
+> [`docs/GUIA-AGENTES.md`](docs/GUIA-AGENTES.md#2-arranque-y-control).
+
 Si vas a automatizar con un agente o un script, hay un ayudante que lanza el
 emulador desacoplado y espera a que responda:
 
