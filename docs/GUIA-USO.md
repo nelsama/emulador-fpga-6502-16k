@@ -708,6 +708,9 @@ los bits 0-2 al escribir `$C002`.
 | Fuego | **Espacio**, Z, Ctrl izq. o Intro | A, B, X, Y, hombros o gatillos |
 | Pantalla completa | **F11** o Alt+Intro | — |
 
+Redimensionar y maximizar: ver "Agrandar la ventana / pantalla completa" más
+abajo; en ambos casos solo crece el vídeo.
+
 Las dos fuentes **conviven**: si mantienes una dirección con el mando y pulsas
 otra tecla, ambas cuentan; soltar una no anula la otra. Cualquier mando que
 reconozca SDL sirve (Xbox, DualShock, genéricos), y se puede enchufar con el
@@ -747,19 +750,27 @@ La ventana tiene dos zonas:
 Si la ventana no cabe en la pantalla (1366×768, portátiles con DPI alto), se
 reduce la escala del vídeo a ×2 automáticamente; el panel lateral nunca baja.
 
-#### Pantalla completa
+#### Agrandar la ventana / pantalla completa
 
-| Acción | Tecla |
+| Acción | Cómo |
 |---|---|
-| Entrar / salir de pantalla completa | **F11** o **Alt+Intro** |
+| Maximizar (solo crece el vídeo) | **Botón maximizar** de Windows o doble clic en la barra de título |
+| Redimensionar a mano | Arrastrar los bordes o esquinas |
+| Pantalla completa | **F11** o **Alt+Intro** (sin barra de título ni bordes) |
+| Volver al tamaño original | Botón restaurar, o **F11** si estabas a pantalla completa |
 
-En pantalla completa **solo se amplía el vídeo**: el panel lateral conserva su
-tamaño (400 px) y su posición a la izquierda. El vídeo se escala al **mayor
-factor entero** que quepa en el espacio libre (en una pantalla 1080p suele ser
-×3 o ×4) y se centra en la zona libre, con 16 px de separación del panel. Si no
-cabe a escala entera, se estira manteniendo la proporción 4:3 (sin deformar).
+En los tres casos **solo se amplía el vídeo**: el panel lateral conserva su
+tamaño (400 px) y su posición a la izquierda, y la consola no gana ni pierde
+caracteres. El vídeo se escala al **mayor factor entero** que quepa en el
+espacio libre (en un 1080p suele ser ×3 o ×4) y se centra en ese hueco, con
+16 px de separación del panel. Si no cabe a escala entera, se estira
+manteniendo la proporción 4:3 (sin deformar).
 
-Al salir se restaura la geometría exacta de la ventana (tamaño y posición).
+La ventana tiene un tamaño mínimo igual al de arranque, así que no se puede
+encoger hasta aplastar el panel.
+
+Al salir de pantalla completa se restaura la geometría exacta (tamaño y
+posición) que tenía la ventana.
 
 Para arrancar ya en pantalla completa (lanzadores, scripts):
 

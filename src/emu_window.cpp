@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 #include "gpio_uart.h"
@@ -172,11 +173,15 @@ bool EmuWindow::start(int video_w, int video_h, int scale, bool terminal) {
       "Emulador FPGA 6502 - Tang Nano 9K",
       SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
       w_ * scale_ + panel_w_, h_ * scale_,
-      SDL_WINDOW_SHOWN);
+      SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE);
   if (!win) {
     std::fprintf(stderr, "video: SDL_CreateWindow fallo: %s\n", SDL_GetError());
     return false;
   }
+  // Tamano minimo: el panel lateral y el video a la escala calculada. Asi el
+  // boton de maximizar (y el arrastre de bordes) siempre amplian el video y
+  // nunca aplastan el panel.
+  SDL_SetWindowMinimumSize(win, w_ * scale_ + panel_w_, h_ * scale_);
 
   SDL_Renderer* ren = SDL_CreateRenderer(win, -1, SDL_RENDERER_ACCELERATED);
   if (!ren) ren = SDL_CreateRenderer(win, -1, SDL_RENDERER_SOFTWARE);
@@ -296,45 +301,46 @@ void EmuWindow::present(const uint32_t* rgb, uint8_t leds) {
   // --- Vídeo (columna derecha) ---
   //
   // En ventana va a su escala normal (×scale_, 1 px de emulador = N px).
-  // A pantalla completa se escala lo máximo posible manteniendo la proporción
-  // y la zona de vídeo se centra en lo que queda a la derecha del panel.
+  // Si el usuario agranda la ventana a mano o la maximiza (botón de Windows),
+  // el panel lateral NO cambia: es el vídeo el que se amplía hasta llenar el
+  // sitio. Igual a pantalla completa.
+  int out_w = 0, out_h = 0;
+  SDL_GetRendererOutputSize(ren, &out_w, &out_h);
+
   SDL_Rect vdst;
-  if (fullscreen_) {
-    int ow = 0, oh = 0;
-    SDL_GetRendererOutputSize(ren, &ow, &oh);
-    const int aw = ow - panel_w_ - VIDEO_PAD;   // ancho disponible
-    const int ah = oh;
-    if (aw <= 0 || ah <= 0) return;
-    // Factor entero siempre que quepa (píxeles cuadrados, como en el FPGA).
-    // El margen VIDEO_PAD separa el vídeo del panel lateral y de los bordes.
-    int f = aw / w_;
-    if (f < 1) f = 1;
-    if (f * h_ > ah) f = ah / h_;
-    if (f < 1) {
-      // No cabe a escala entera: se estira manteniendo la proporción.
-      const double fx = (double)aw / w_;
-      const double fy = (double)ah / h_;
-      const double fmin = fx < fy ? fx : fy;
-      const int vw = (int)(w_ * fmin);
-      const int vh = (int)(h_ * fmin);
-      vdst = SDL_Rect{panel_w_ + VIDEO_PAD + (aw - vw) / 2, (ah - vh) / 2, vw, vh};
+  {
+    const int available_w = out_w - panel_w_ - VIDEO_PAD;
+    const int available_h = out_h;
+    const int base_w = w_ * scale_;
+    const int base_h = h_ * scale_;
+    if (fullscreen_ || available_w > base_w + 8 || available_h > base_h + 8) {
+      // Hay sitio de sobra: se escala al mayor factor entero que quepa (píxeles
+      // cuadrados, como en el FPGA) y se centra en la zona libre.
+      int f = available_w / w_;
+      if (f * h_ > available_h) f = available_h / h_;
+      if (f < 1) {
+        // No cabe a escala entera: se estira manteniendo la proporción 4:3.
+        const double fx = (double)available_w / w_;
+        const double fy = (double)available_h / h_;
+        const double fmin = fx < fy ? fx : fy;
+        const int vw = (int)(w_ * fmin);
+        const int vh = (int)(h_ * fmin);
+        vdst = SDL_Rect{panel_w_ + VIDEO_PAD + (available_w - vw) / 2,
+                        (available_h - vh) / 2, vw, vh};
+      } else {
+        const int vw = w_ * f;
+        const int vh = h_ * f;
+        vdst = SDL_Rect{panel_w_ + VIDEO_PAD + (available_w - vw) / 2,
+                        (available_h - vh) / 2, vw, vh};
+      }
     } else {
-      const int vw = w_ * f;
-      const int vh = h_ * f;
-      vdst = SDL_Rect{panel_w_ + VIDEO_PAD + (aw - vw) / 2, (ah - vh) / 2, vw, vh};
+      vdst = SDL_Rect{panel_w_, 0, base_w, base_h};
     }
-  } else {
-    vdst = SDL_Rect{panel_w_, 0, w_ * scale_, h_ * scale_};
   }
   SDL_RenderCopy(ren, tex, nullptr, &vdst);
 
-  // Alto útil del panel: el de la ventana, o el de la pantalla a fullscreen.
-  int area_h = h_ * scale_;
-  {
-    int ow = 0, oh = 0;
-    SDL_GetRendererOutputSize(ren, &ow, &oh);
-    if (oh > 0) area_h = oh;
-  }
+  // Alto útil del panel: el de la ventana (o el de la pantalla a fullscreen).
+  const int area_h = out_h > 0 ? out_h : h_ * scale_;
 
   // --- Panel lateral izquierdo ---
   //
