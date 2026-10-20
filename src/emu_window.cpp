@@ -83,8 +83,7 @@ void draw_led(SDL_Renderer* r, int cx, int cy, int radius, bool on) {
 // socket, para depurar sin cambiar a PuTTY.
 static constexpr int TERM_CW = 8 * 2;   // ancho de celda en píxeles
 static constexpr int TERM_CH = 8 * 2;   // alto de celda en píxeles
-static constexpr int TERM_COLS = 60;    // columnas visibles
-static constexpr int TERM_ROWS = 14;    // renglones visibles
+static constexpr int TERM_COLS = 24;    // columnas visibles
 static constexpr int TERM_PAD = 10;     // margen interior
 
 void draw_glyph(SDL_Renderer* r, int x, int y, char c) {
@@ -131,32 +130,28 @@ bool EmuWindow::start(int video_w, int video_h, int scale, bool terminal) {
   h_ = video_h;
   scale_ = scale;
   terminal_ = terminal;
+  // Panel lateral: presente si hay algo que poner en él (ahora, el terminal).
+  panel_w_ = terminal_ ? PANEL_W : 0;
 
-  // Alto del panel inferior: la placa con los LEDs y, si se pide, el terminal.
-  const int board_h = 46;
-  panel_h_ = 78;
-  if (terminal_) panel_h_ += board_h + TERM_ROWS * TERM_CH + 2 * TERM_PAD + 8;
-
-  // Con el terminal la ventana es bastante alta y puede no caber en pantallas
-  // pequeñas (p. ej. 1366x768 o portátiles). Se reduce la escala del vídeo
-  // antes que dejar la ventana cortada, que es peor para depurar.
   if (SDL_InitSubSystem(SDL_INIT_VIDEO) != 0) {
     std::fprintf(stderr, "video: SDL_InitSubSystem fallo: %s\n", SDL_GetError());
     return false;
   }
 
-  // Con el terminal la ventana es bastante alta y puede no caber en pantallas
-  // pequeñas (p. ej. 1366x768 o portátiles). Se reduce la escala del vídeo de
-  // ×3 a ×2 (nunca más abajo: se vería peor que el original) antes que dejar
-  // la ventana cortada.
+  // Con el panel lateral la ventana es más ancha; si no cabe en pantallas
+  // pequeñas (1366x768, portátiles con DPI alto) se reduce la escala del vídeo.
   // (Después de SDL_InitSubSystem: antes no hay modo de vídeo consultable.)
-  // Ojo: con DPI al 125% SDL devuelve el alto en px escalados, de ahí el margen
-  // generoso.
-  if (terminal_) {
+  {
     SDL_Rect usable{0, 0, 0, 0};
-    if (SDL_GetDisplayUsableBounds(0, &usable) == 0 && usable.h > 0 &&
-        scale_ > 2 && h_ * scale_ + panel_h_ + 110 > usable.h) {
-      scale_ = 2;
+    if (SDL_GetDisplayUsableBounds(0, &usable) == 0 &&
+        usable.w > 0 && usable.h > 0) {
+      // Nunca por debajo de ×2: se vería peor que el original. Márgenes para
+      // la barra de título, la de tareas y el redondeo del DPI.
+      while (scale_ > 2 &&
+             (w_ * scale_ + panel_w_ + 40 > usable.w ||
+              h_ * scale_ + 120 > usable.h)) {
+        scale_--;
+      }
     }
   }
   // Mandos del PC: si no hay ninguno, SDL simplemente no genera eventos. Se
@@ -173,7 +168,7 @@ bool EmuWindow::start(int video_w, int video_h, int scale, bool terminal) {
   SDL_Window* win = SDL_CreateWindow(
       "Emulador FPGA 6502 - Tang Nano 9K",
       SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-      w_ * scale_, h_ * scale_ + panel_h_,
+      w_ * scale_ + panel_w_, h_ * scale_,
       SDL_WINDOW_SHOWN);
   if (!win) {
     std::fprintf(stderr, "video: SDL_CreateWindow fallo: %s\n", SDL_GetError());
@@ -202,8 +197,8 @@ bool EmuWindow::start(int video_w, int video_h, int scale, bool terminal) {
   texture_ = tex;
   active_ = true;
   joy_ = Gpio::JOY_IDLE;
-  std::printf("Video: ventana %dx%d (escala %dx) + panel de LEDs%s\n", w_, h_, scale_,
-              terminal_ ? " + terminal UART" : "");
+  std::printf("Video: ventana %dx%d (escala %dx)%s\n", w_, h_, scale_,
+              terminal_ ? " + panel lateral: LEDs y terminal UART" : "");
   std::printf("Joystick (puerto 1): cursores o WASD para mover, Espacio/Z/Ctrl para fuego."
               " También sirve un mando conectado al PC.\n");
   return true;
@@ -248,65 +243,74 @@ void EmuWindow::present(const uint32_t* rgb, uint8_t leds) {
   SDL_SetRenderDrawColor(ren, 28, 30, 34, 255);
   SDL_RenderClear(ren);
 
-  // --- Vídeo ---
-  SDL_Rect vdst{0, 0, w_ * scale_, h_ * scale_};
+  // --- Vídeo (columna derecha) ---
+  SDL_Rect vdst{panel_w_, 0, w_ * scale_, h_ * scale_};
   SDL_RenderCopy(ren, tex, nullptr, &vdst);
 
-  // --- Panel inferior ---
-  const int panel_y = h_ * scale_;
-  SDL_Rect panel{0, panel_y, w_ * scale_, panel_h_};
-  SDL_SetRenderDrawColor(ren, 34, 37, 43, 255);
-  SDL_RenderFillRect(ren, &panel);
+  // --- Panel lateral izquierdo ---
+  //
+  // Se organiza en módulos apilados de arriba abajo: cada uno es un bloque
+  // con su título y su propio contenido. Para añadir uno nuevo basta con
+  // calcular su rectángulo a partir de `y` y restar su alto, que es lo que se
+  // hace aquí con la placa de LEDs y el terminal.
+  if (panel_w_ > 0) {
+    SDL_Rect panel{0, 0, panel_w_, h_ * scale_};
+    SDL_SetRenderDrawColor(ren, 34, 37, 43, 255);
+    SDL_RenderFillRect(ren, &panel);
 
-  // Línea superior del panel.
-  SDL_SetRenderDrawColor(ren, 52, 57, 66, 255);
-  SDL_RenderDrawLine(ren, 0, panel_y, w_ * scale_, panel_y);
+    // Separador vertical entre el panel y el vídeo.
+    SDL_SetRenderDrawColor(ren, 52, 57, 66, 255);
+    SDL_RenderDrawLine(ren, panel_w_ - 1, 0, panel_w_ - 1, h_ * scale_);
 
-  // La "placa": rectángulo oscuro que imita el PCB del Tang Nano 9K.
-  const int board_w = 6 * 30 + 34;
-  const int board_h = 46;
-  const int board_x = (w_ * scale_ - board_w) / 2;
-  const int board_y = panel_y + 16;
-  SDL_Rect board{board_x, board_y, board_w, board_h};
-  fill_round_rect(ren, board, 8, SDL_Color{18, 40, 30, 255});
-  SDL_SetRenderDrawColor(ren, 30, 70, 52, 255);
-  SDL_RenderDrawRect(ren, &board);
+    int y = 12; // cursor vertical dentro del panel
 
-  // 6 LEDs tipo SMD, alineados como en la placa.
-  const int radius = 7;
-  const int spacing = 30;
-  const int first_x = board_x + 26;
-  const int cy = board_y + board_h / 2;
-  for (int i = 0; i < 6; i++) {
-    draw_led(ren, first_x + i * spacing, cy, radius, (leds >> i) & 1);
-  }
+    // --- Módulo 1: placa Tang Nano 9K con sus 6 LEDs ---
+    const int board_w = 6 * 30 + 34;
+    const int board_h = 46;
+    const int board_x = (panel_w_ - board_w) / 2;
+    SDL_Rect board{board_x, y, board_w, board_h};
+    fill_round_rect(ren, board, 8, SDL_Color{18, 40, 30, 255});
+    SDL_SetRenderDrawColor(ren, 30, 70, 52, 255);
+    SDL_RenderDrawRect(ren, &board);
 
-  // --- Terminal del UART ---
-  if (terminal_) {
-    const int term_y = board_y + board_h + 8;
-    const int term_h = panel_h_ - (term_y - panel_y) - 8;
-    SDL_Rect term{TERM_PAD / 2, term_y, w_ * scale_ - TERM_PAD, term_h};
-    SDL_SetRenderDrawColor(ren, 10, 14, 12, 255);
-    SDL_RenderFillRect(ren, &term);
-    SDL_SetRenderDrawColor(ren, 30, 48, 38, 255);
-    SDL_RenderDrawRect(ren, &term);
+    const int radius = 7;
+    const int spacing = 30;
+    const int first_x = board_x + 26;
+    const int cy = y + board_h / 2;
+    for (int i = 0; i < 6; i++) {
+      draw_led(ren, first_x + i * spacing, cy, radius, (leds >> i) & 1);
+    }
+    y += board_h + 14;
 
-    // Se dibujan los últimos renglones que caben, alineados abajo: lo más
-    // reciente queda siempre visible, como en un terminal real.
-    const int visibles = (term_h - TERM_PAD) / TERM_CH;
-    const int total = (int)term_lineas_.size();
-    const int desde = total > visibles ? total - visibles : 0;
-    SDL_SetRenderDrawColor(ren, 180, 220, 180, 255);
-    int y = term_y + TERM_PAD / 2;
-    for (int i = desde; i < total; i++) {
-      const std::string& linea = term_lineas_[(size_t)i];
-      int x = term.x + TERM_PAD / 2;
-      const int maxc = (term.w - TERM_PAD) / TERM_CW;
-      for (int c = 0; c < (int)linea.size() && c < maxc; c++) {
-        draw_glyph(ren, x, y, linea[(size_t)c]);
-        x += TERM_CW;
+    // --- Módulo 2: terminal del UART ---
+    if (terminal_) {
+      const int alto_total = h_ * scale_;
+      const int term_h = alto_total - y - 12; // hasta el borde inferior
+      const int term_x = 8;
+      const int term_w = panel_w_ - 16;
+      SDL_Rect term{term_x, y, term_w, term_h};
+      SDL_SetRenderDrawColor(ren, 10, 14, 12, 255);
+      SDL_RenderFillRect(ren, &term);
+      SDL_SetRenderDrawColor(ren, 30, 48, 38, 255);
+      SDL_RenderDrawRect(ren, &term);
+
+      // Se dibujan los últimos renglones que caben, alineados abajo: lo más
+      // reciente queda siempre visible, como en un terminal real.
+      const int visibles = (term_h - TERM_PAD) / TERM_CH;
+      const int total = (int)term_lineas_.size();
+      const int desde = total > visibles ? total - visibles : 0;
+      const int maxc = (term_w - TERM_PAD) / TERM_CW;
+      SDL_SetRenderDrawColor(ren, 180, 220, 180, 255);
+      int ly = y + TERM_PAD / 2;
+      for (int i = desde; i < total; i++) {
+        const std::string& linea = term_lineas_[(size_t)i];
+        int lx = term_x + TERM_PAD / 2;
+        for (int c = 0; c < (int)linea.size() && c < maxc; c++) {
+          draw_glyph(ren, lx, ly, linea[(size_t)c]);
+          lx += TERM_CW;
+        }
+        ly += TERM_CH;
       }
-      y += TERM_CH;
     }
   }
 

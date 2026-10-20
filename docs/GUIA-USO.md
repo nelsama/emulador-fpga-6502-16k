@@ -725,10 +725,31 @@ Si pone `NO son entrada: el juego no ha llamado a joy_init()`, el programa no
 ha configurado los pines del puerto 1, y leerá siempre el registro de salida
 (`0x00`) en vez del joystick. Es el error más común al integrar el mando.
 
+#### Disposición de la ventana
+
+La ventana tiene dos zonas:
+
+```
++---------------------------+-------------------------------+
+| PANEL LATERAL             |                               |
+|  [ placa Tang Nano 9K ]   |                               |
+|  [    6 LEDs          ]   |      vídeo 320x240 x N        |
+|  [ terminal del UART  ]   |                               |
++---------------------------+-------------------------------+
+```
+
+- **Izquierda (400 px):** el "banco de trabajo" de depuración. Arriba la placa
+  con sus 6 LEDs; debajo, el terminal del UART. Está pensado para ir apilando
+  **más módulos** (registros del SID, volcado de VRAM, etc.) sin tocar el vídeo.
+- **Derecha:** el framebuffer del Core de Vídeo, escalado ×N y alineado arriba.
+
+Si la ventana no cabe en la pantalla (1366×768, portátiles con DPI alto), se
+reduce la escala del vídeo a ×2 automáticamente; el panel lateral nunca baja.
+
 #### LEDs
 
-Puerto 2, activos en bajo (`1` en `leds()` = encendido). Se dibujan en un panel
-bajo el vídeo con forma de placa.
+Puerto 2, activos en bajo (`1` en `leds()` = encendido). Se dibujan en el panel
+lateral, arriba, con forma de placa.
 
 El **SID player** los usa como VU meter: lee las envolventes del SID en `$D41D`
 (voz 1), `$D41E` (voz 2), `$D41C` (voz 3) y `$D41F` (máximo de las tres) y
@@ -744,9 +765,9 @@ SID ($D400-$D41F):
 
 #### Terminal del UART en la ventana
 
-Debajo de la placa, la ventana muestra un **panel de terminal** con la salida
-del UART: exactamente lo mismo que saldría por PuTTY. Sirve para depurar sin
-cambiar de ventana (cargar un binario, ver un listado, leer mensajes del
+En la parte baja del panel lateral, la ventana muestra un **terminal** con la
+salida del UART: exactamente lo mismo que saldría por PuTTY. Sirve para depurar
+sin cambiar de ventana (cargar un binario, ver un listado, leer mensajes del
 programa).
 
 Cómo funciona:
@@ -757,18 +778,33 @@ Cómo funciona:
 - Los caracteres de control no se pintan: `\r` se descarta y `\n` abre línea.
   Si el programa hace movimiento de cursor (`ESC[...`) no se interpreta; para
   eso está PuTTY.
-- Se muestran las **últimas 16 líneas**, alineadas abajo: lo más reciente está
-  siempre visible, como en un terminal real.
-- La fuente es la del Core de Vídeo (`src/video/font_c64.h`), escalada ×2.
+- Se muestran tantas líneas como quepan (las **últimas**, alineadas abajo): lo
+  más reciente está siempre visible, como en un terminal real. Las líneas más
+  largas que el panel se cortan por la derecha.
+- La fuente es la del Core de Vídeo (`src/video/font_c64.h`), escalada ×2, lo
+  que da ~24 columnas de ancho.
 
-Con el terminal la ventana es más alta, así que si no cabe en la pantalla se
-reduce automáticamente la escala del vídeo (de ×3 a ×2), sin tocar el panel.
-
-Para desactivarlo (ventana compacta), cambia en `src/main.cpp`:
+Para quitar el panel lateral (ventana solo con vídeo), cambia en `src/main.cpp`:
 
 ```cpp
 window.start(Video::W, Video::H, 3, /*terminal=*/false);
 ```
+
+#### Añadir módulos al panel lateral
+
+Todo el panel lo pinta `EmuWindow::present()` en `src/emu_window.cpp`, con un
+cursor vertical `y` que va bajando:
+
+```cpp
+int y = 12;                 // cursor dentro del panel lateral
+// ... módulo 1: placa + LEDs (usa `y`, y `y += alto`)
+// ... módulo 2: terminal    (usa `y` y baja hasta el borde inferior)
+```
+
+Para añadir un módulo nuevo basta con dibujarlo en el rectángulo
+`{8, y, panel_w_ - 16, alto}` y hacer `y += alto + separación`. El terminal
+toma lo que sobre hasta el borde inferior, así que conviene poner los módulos
+nuevos **antes** de él (arriba) o reducir su alto.
 
 ---
 
@@ -920,7 +956,7 @@ src/
   sid.h/.cpp           SID sobre reSIDfp $D400-$D41F
   gpio_uart.h/.cpp     GPIO $C000-$C003 (joystick + LEDs)
   audio.h/.cpp         salida de audio SDL2 (ring buffer + colchón)
-  emu_window.h/.cpp    ventana: vídeo escalado + panel de 6 LEDs + terminal UART
+  emu_window.h/.cpp    ventana: vídeo escalado + panel lateral (LEDs, terminal UART)
   tcp_server.h/.cpp    UART <-> socket TCP
   debug_server.h/.cpp  servidor HTTP de depuración
   debug_dump.h/.cpp    PNG sin dependencias + volcados de texto

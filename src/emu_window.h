@@ -4,11 +4,19 @@
 #include <string>
 #include <vector>
 
-// Ventana del emulador: vídeo del Core de Vídeo + LEDs del Tang Nano 9K.
+// Ventana del emulador: vídeo del Core de Vídeo + panel lateral de depuración.
 //
-// La ventana muestra el framebuffer de 320x240 escalado y, debajo, una tira
-// que imita los 6 LEDs de la placa (los usa, por ejemplo, el SID player como VU
-// meter).
+// Disposición:
+//
+//   +---------------------------+-------------------------------+
+//   | PANEL LATERAL             |                               |
+//   |  [ placa + 6 LEDs ]       |      vídeo 320x240 x N        |
+//   |  [ terminal del UART  ]   |                               |
+//   +---------------------------+-------------------------------+
+//
+// El panel lateral sirve de "banco de trabajo": hoy lleva la placa (6 LEDs,
+// los usa por ejemplo el SID player como VU meter) y el terminal del UART, y
+// está pensado para ir añadiendo módulos apilados debajo.
 //
 // Entrada: simula el joystick Atari (DB9) conectado al puerto 1 del FPGA.
 // Admite dos fuentes a la vez:
@@ -28,8 +36,9 @@ public:
   EmuWindow() = default;
   ~EmuWindow();
 
-  // Abre la ventana. Devuelve false si no se pudo (o si no hay SDL2).
-  // `terminal` añade un panel con la salida del UART (lo que vería PuTTY).
+  // Abre la ventana. Devuelve false si se pudo (o si no hay SDL2).
+  // `terminal` añade el panel lateral con los LEDs y la salida del UART (lo
+  // mismo que vería PuTTY). Sin él, la ventana es solo el vídeo.
   bool start(int video_w, int video_h, int scale = 3, bool terminal = false);
 
   // Dibuja un fotograma. `rgb` son video_w*video_h píxeles en formato 0x00RRGGBB
@@ -52,6 +61,11 @@ public:
   uint8_t joy() const { return joy_; }
 
 private:
+  // Ancho del panel lateral, en píxeles de ventana. Con terminal a ×2 cabe
+  // ~24 columnas de la fuente 8x8 escalada x2, que es lo que mide el monitor
+  // del firmware. Es fijo para que no baile con cada línea de texto.
+  static constexpr int PANEL_W = 400;
+
   bool active_ = false;
   void* window_ = nullptr;
   void* renderer_ = nullptr;
@@ -59,8 +73,8 @@ private:
   int w_ = 320;
   int h_ = 240;
   int scale_ = 3;
-  int panel_h_ = 78;
-  bool terminal_ = false;         // panel de terminal activado
+  int panel_w_ = 0;               // ancho del panel lateral (0 = sin panel)
+  bool terminal_ = false;         // módulo del terminal activado
   std::vector<std::string> term_lineas_; // últimos renglones del UART
   uint8_t joy_ = 0xF8; // en reposo: todo a 1 (activo en bajo)
   // Estado de cada fuente por separado, para combinarlas sin que una borre a
