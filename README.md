@@ -7,6 +7,8 @@ pensado para **desarrollar y depurar software** para esa plataforma.
 
 Otros documentos:
 
+- [`docs/GUIA-AGENTES.md`](docs/GUIA-AGENTES.md) — **para agentes de IA**: qué
+  puede ver el emulador, cómo capturarlo y qué trampas evitar.
 - [`docs/PROCEDIMIENTOS.md`](docs/PROCEDIMIENTOS.md) — cómo se midió y verificó
   cada periférico, y las trampas encontradas.
 - [`docs/PUTTY-SETUP.md`](docs/PUTTY-SETUP.md) — configuración del terminal.
@@ -49,10 +51,11 @@ Y abre en el navegador **<http://localhost:8080>** para ver el vídeo en vivo.
 | SID 6581 | ✅ | **reSIDfp** (VICE), reloj 27 MHz/28 |
 | Core de Vídeo | ✅ | tiles, sprites, scroll por bandas, paletas |
 | GPIO | ✅ | joystick Atari (puerto 1) + 6 LEDs (puerto 2) |
-| Ventana SDL2 | ✅ | vídeo escalado + panel de LEDs |
+| Ventana SDL2 | ✅ | vídeo + panel (LEDs, puerto 1, consola), 3 vistas |
 | Entrada | ✅ | teclado, mando del PC o comandos por UART |
 | Ritmo | ✅ | CPU 3.375 MHz reales, vídeo 59,94 Hz, timer en µs |
-| Audio SDL2 | ✅ | ring buffer con colchón de 60 ms |
+| Audio SDL2 | ✅ | ring buffer con colchón de 25 ms |
+| Terminal de consola | ✅ | 80×24 fijo, ANSI + CP437, con scrollback |
 
 ---
 
@@ -86,6 +89,8 @@ python tools/emu_agent.py stop
 | `/screen.ppm` | La misma imagen sin comprimir |
 | `/vram.txt` | Tilemap, atributos y OAM en texto (+ vista ASCII) |
 | `/vram.json` | Lo mismo en JSON, para procesarlo con código |
+| `/console.txt` | **Pantalla de la consola (80×24)** tal como la interpreta el terminal |
+| `/console.png` | Captura de la consola (640×384) con colores ANSI y glifos CP437 |
 | `/state.txt` | GPIO (joystick, LEDs), vídeo, SID y UART |
 | `/ram.bin` | Los 16 KB de RAM (`?start=&len=` para un trozo) |
 
@@ -95,6 +100,7 @@ desde un agente de IA o un test automático:
 ```bash
 curl -o pantalla.png http://localhost:8080/screen.png
 curl -o pantalla_grande.png "http://localhost:8080/screen.png?scale=2"
+curl http://localhost:8080/console.txt        # lo que se ve en la consola
 ```
 
 ---
@@ -126,6 +132,8 @@ El joystick Atari del puerto 1 se maneja desde la ventana:
 |---|---|---|
 | Mover | Cursores o **WASD** | Stick izquierdo o cruceta |
 | Fuego | **Espacio**, Z, Ctrl izq. o Intro | A/B/X/Y, hombros o gatillos |
+| Cambiar de vista | **F11** o Alt+Intro | Clic en la pestaña del margen |
+| Volver a la vista normal | **Esc** o clic derecho | — |
 
 Las dos fuentes conviven, y los comandos por UART siguen funcionando en
 paralelo (cada juego define sus teclas).
@@ -203,13 +211,15 @@ src/
   sid.*                SID sobre reSIDfp
   gpio_uart.*          GPIO $C000-$C003 (joystick + LEDs)
   audio.*              salida de audio SDL2
-  emu_window.*         ventana: vídeo + panel lateral (LEDs, terminal UART)
+  emu_window.*         ventana: vídeo + panel (LEDs, puerto 1, consola), 3 vistas
+  terminal/            emulador de terminal 80x24 (ANSI + CP437 + fuente)
   tcp_server.*         UART <-> TCP
   debug_server.*       servidor HTTP de depuración (no bloquea la emulación)
   debug_dump.*         PNG/PPM/JSON/texto y volcado de RAM
   video/               motor del Core de Vídeo
 third_party/residfp/   núcleo SID de VICE (GPL v2+)
-tools/                 gen_font, extract_rom, sd_tool, diag_rx, crear_sd.sh, emu_agent.py
+tools/                 gen_font, gen_font_cp437, test_terminal, extract_rom,
+                       sd_tool, diag_rx, crear_sd.sh, emu_agent.py
 rom/monitor.bin        ROM del monitor v2.6.2
 sdcard/                contenido de la SD (la imagen se regenera con tools/crear_sd.sh)
 run.sh / run.bat             lanzadores (sin depuracion)

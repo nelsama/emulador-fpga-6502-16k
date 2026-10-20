@@ -10,6 +10,8 @@ pantalla manuales — incluido por un agente de IA.
 
 > **Documentos relacionados**
 >
+> - [`GUIA-AGENTES.md`](GUIA-AGENTES.md) — **para agentes de IA**: qué puede
+>   ver el emulador, cómo capturarlo y qué trampas evitar.
 > - [`PROCEDIMIENTOS.md`](PROCEDIMIENTOS.md) — cómo se midió y verificó cada
 >   periférico, y las trampas encontradas.
 > - [`PUTTY-SETUP.md`](PUTTY-SETUP.md) — configuración del terminal.
@@ -75,7 +77,10 @@ make SDL2_PREFIX=C:/msys64/ucrt64
 
 `make` copia `SDL2.dll` junto al ejecutable automáticamente.
 
-Otros objetivos: `make run`, `make clean`, `make rebuild`.
+Otros objetivos: `make run`, `make test`, `make clean`, `make rebuild`.
+
+`make test` compila y ejecuta las pruebas del intérprete de terminal (no
+necesitan SDL ni abrir la ventana, y tardan menos de un segundo).
 
 ---
 
@@ -445,6 +450,7 @@ El servidor escucha solo en `127.0.0.1`: no queda expuesto a la red.
 | `EMU_AUDIO_DEVICE` | Fuerza un dispositivo de audio por nombre | `EMU_AUDIO_DEVICE="Altavoces (Realtek(R) Audio)"` |
 | `EMU_WAV` | Vuelca la salida del SID a un WAV | `EMU_WAV=grabacion.wav` |
 | `EMU_TRACE` | Muestra avisos de rendimiento y audio | `EMU_TRACE=1` |
+| `EMU_FULLSCREEN` | Arranca en vista de pantalla completa (solo vídeo) | `EMU_FULLSCREEN=1` |
 | `SDL_AUDIODRIVER` | Fuerza el backend de audio de SDL | `SDL_AUDIODRIVER=directsound` |
 
 ### Si el sonido va por detrás del vídeo
@@ -1059,16 +1065,24 @@ src/
     font_c64.h         fuente C64 generada desde el VHDL
     render.cpp         puente para el renderer
 
+  terminal/
+    terminal_state.h/.cpp  emulador de terminal 80x24: ANSI + scrollback
+    font_cp437.h           fuente CP437 de 256 glifos (generada)
+
 third_party/residfp/   núcleo reSIDfp de VICE (audio)
 
 tools/
   gen_font.py          regenera font_c64.h desde font_data.vhd
+  gen_font_cp437.py    regenera font_cp437.h (los 256 glifos de CP437)
+  test_terminal.cpp    pruebas del intérprete de terminal (make test)
   extract_rom.py       extrae la ROM de un rom.vhd
   sd_tool.py           list / info / inject / extract / delete / format
   diag_rx.cpp          diagnóstico del bucle de entrada del monitor
+  emu_agent.py         lanza/controla el emulador desde scripts o agentes
 
 docs/
   GUIA-USO.md          esta guía
+  GUIA-AGENTES.md      para agentes de IA: qué capturar y qué evitar
   PROCEDIMIENTOS.md    cómo se depuró cada periférico (mediciones y trampas)
   PUTTY-SETUP.md       configuración del terminal
   img/                 capturas

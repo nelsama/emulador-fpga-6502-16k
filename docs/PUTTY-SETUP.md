@@ -46,6 +46,19 @@ mezclado.
 El monitor espera `CR` (0x0D). Si PuTTY envía `LF` (0x0A), no reconoce el fin
 de línea.
 
+### Window → Translation
+
+| Opción | Valor |
+|---|---|
+| Remote character set | **CP437** (o *Use font encoding* con una fuente que la incluya) |
+
+Los programas de esta plataforma (Tetris, editor, monitor) dibujan marcos y
+bloques con la tabla **CP437**: `│ ─ ┌ ┐ █ ▓ ▒`. Si PuTTY está en UTF-8 se ven
+como huecos o caracteres raros. El terminal interno del emulador usa CP437, así
+que con esta opción se ve **lo mismo en los dos sitios**.
+
+> No es UTF-8: el UART mueve bytes sueltos, no texto Unicode.
+
 ### Terminal → Implicit CR in every LF
 
 | Opción | Valor |

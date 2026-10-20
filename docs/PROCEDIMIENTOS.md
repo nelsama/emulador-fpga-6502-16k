@@ -21,8 +21,9 @@ Sirve para dos cosas:
 5. [Verificar el joystick](#5-verificar-el-joystick)
 6. [Verificar el SID player](#6-verificar-el-sid-player)
 7. [Fidelidad frente al hardware real](#7-fidelidad-frente-al-hardware-real)
-8. [Trampas encontradas](#8-trampas-encontradas)
-9. [Plantilla de verificación rápida](#9-plantilla-de-verificación-rápida)
+8. [Verificar el terminal de consola](#8-verificar-el-terminal-de-consola)
+9. [Trampas encontradas](#9-trampas-encontradas)
+10. [Plantilla de verificación rápida](#10-plantilla-de-verificación-rápida)
 
 ---
 
@@ -298,7 +299,54 @@ este proyecto, al menos un "bug" era en realidad una configuración del terminal
 
 ---
 
-## 8. Trampas encontradas
+## 8. Verificar el terminal de consola
+
+La consola del panel interpreta ANSI y dibuja CP437. Para comprobar que sigue
+haciéndolo bien hay dos caminos.
+
+### Sin abrir la ventana
+
+```bash
+make test
+```
+
+Cubre: CRLF, `ED`/`EL`/`ECH`, SGR (color, negrita, inverso), cursor
+visible/oculto, scroll con historial, CP437, secuencias desconocidas, OSC, TAB,
+BS y auto-wrap. Tarda menos de un segundo.
+
+Para interpretar la salida de un binario real:
+
+```bash
+./test_terminal.exe ruta/al/juego.bin
+```
+
+Vuelca las últimas filas y cuántas celdas tienen byte ≥ 0x80 (los marcos y
+bloques). Útil como prueba de humo de un binario nuevo.
+
+### Con el emulador en marcha
+
+```bash
+curl http://localhost:8080/console.txt     # 80x24 en texto
+curl -o consola.png "http://localhost:8080/console.png?scale=2"
+```
+
+Qué mirar, comparando con PuTTY:
+
+| Comprobación | Correcto | Síntoma de fallo |
+|---|---|---|
+| Marcos `│ ─ ┌┐└┘` | continuos, sin huecos | glifos desplazados o ausentes |
+| Colores | texto rojo/verde donde el programa los pide | todo en blanco |
+| Posicionamiento | el marcador arriba a la derecha | todo en una columna |
+| Limpieza de pantalla (`ESC[2J`) | pantalla nueva vacía | texto viejo solapado |
+| Acentos y bloques | `á é í ñ █ ▓ ▒ ░` | huecos o caracteres raros |
+
+El programa de referencia usado fue el Tetris de consola
+(`tetris.bin`, 6 KB): al arrancar muestra `SCORE/LINES/LEVEL` arriba a la
+derecha, dos carriles con marcos verticales y las fichas como `[]`.
+
+---
+
+## 9. Trampas encontradas
 
 Esta sección es la más importante del documento. Cada punto costó tiempo real.
 
@@ -442,7 +490,7 @@ el bug simplemente no existía.
 
 ---
 
-## 9. Plantilla de verificación rápida
+## 10. Plantilla de verificación rápida
 
 Tras un cambio importante, esto cubre lo esencial en ~2 minutos.
 
