@@ -282,7 +282,7 @@ bool EmuWindow::start(int video_w, int video_h, int scale, bool terminal) {
   joy_ = Gpio::JOY_IDLE;
   // Arranque directo en pantalla completa (útil para lanzadores y pruebas:
   // EMU_FULLSCREEN=1). F11/Alt+Intro lo alternan en marcha.
-  if (std::getenv("EMU_FULLSCREEN")) toggle_fullscreen();
+  if (std::getenv("EMU_FULLSCREEN")) set_vista(Vista::PantallaCompleta);
   std::printf("Video: ventana %dx%d (escala %dx)%s\n", w_, h_, scale_,
               terminal_ ? " + panel lateral: LEDs y terminal UART" : "");
   std::printf("Joystick (puerto 1): cursores o WASD para mover, Espacio/Z/Ctrl para fuego."
@@ -297,13 +297,14 @@ bool EmuWindow::start(int video_w, int video_h, int scale, bool terminal) {
 #endif
 }
 
-void EmuWindow::toggle_fullscreen() {
+void EmuWindow::set_vista(Vista v) {
 #ifdef HAVE_SDL2
   if (!active_ || !window_) return;
+  if (v == vista_) return;
   SDL_Window* win = static_cast<SDL_Window*>(window_);
-  fullscreen_ = !fullscreen_;
-  if (fullscreen_) {
-    // Se guarda la geometría para restaurarla al salir.
+
+  // Al entrar o salir de pantalla completa se guarda/restaura la geometría.
+  if (v == Vista::PantallaCompleta && vista_ != Vista::PantallaCompleta) {
     SDL_GetWindowPosition(win, &win_x_, &win_y_);
     SDL_GetWindowSize(win, &win_w_, &win_h_);
     SDL_Rect usable{0, 0, 0, 0};
@@ -314,15 +315,82 @@ void EmuWindow::toggle_fullscreen() {
     if (SDL_SetWindowFullscreen(win, SDL_WINDOW_FULLSCREEN_DESKTOP) != 0) {
       std::fprintf(stderr, "video: pantalla completa fallo: %s\n", SDL_GetError());
     }
-  } else {
+  } else if (vista_ == Vista::PantallaCompleta) {
     SDL_SetWindowFullscreen(win, 0);
     SDL_SetWindowBordered(win, SDL_TRUE);
     SDL_SetWindowSize(win, win_w_, win_h_);
     SDL_SetWindowPosition(win, win_x_, win_y_);
   }
-  std::printf("Video: %s\n", fullscreen_ ? "pantalla completa (F11 para salir)" : "ventana");
+
+  vista_ = v;
+  const char* nombre = (v == Vista::Normal)            ? "normal (panel + video)"
+                       : (v == Vista::SoloVideo)       ? "solo video (ventana)"
+                                                       : "solo video (pantalla completa)";
+  std::printf("Vista: %s\n", nombre);
   std::fflush(stdout);
 #endif
+}
+
+void EmuWindow::siguiente_vista() {
+  switch (vista_) {
+    case Vista::Normal:           set_vista(Vista::SoloVideo); break;
+    case Vista::SoloVideo:        set_vista(Vista::PantallaCompleta); break;
+    case Vista::PantallaCompleta: set_vista(Vista::Normal); break;
+  }
+}
+
+// Pestaña para cambiar de vista. Va en el margen del vídeo, no encima de los
+// píxeles del framebuffer: así no tapa lo que se está viendo.
+void EmuWindow::dibujar_boton_vista(void* renderer, int x, int y, int w, int h,
+                                    bool expandir) {
+#ifdef HAVE_SDL2
+  SDL_Renderer* ren = static_cast<SDL_Renderer*>(renderer);
+  boton_x_ = x;
+  boton_y_ = y;
+  boton_w_ = w;
+  boton_h_ = h;
+
+  SDL_Rect r{x, y, w, h};
+  fill_round_rect(ren, r, 4, SDL_Color{52, 58, 70, 235});
+  SDL_SetRenderDrawColor(ren, 110, 124, 148, 255);
+  SDL_RenderDrawRect(ren, &r);
+
+  // Icono: cuatro esquinas (expandir) o dos flechas hacia dentro (volver).
+  const int cx = x + w / 2;
+  const int cy = y + h / 2;
+  SDL_SetRenderDrawColor(ren, 220, 230, 240, 255);
+  if (expandir) {
+    // Marco con esquinas abiertas hacia fuera.
+    const int l = 5, s = 6;
+    // esquina sup. izq.
+    SDL_RenderDrawLine(ren, cx - l, cy - l, cx - l + s, cy - l);
+    SDL_RenderDrawLine(ren, cx - l, cy - l, cx - l, cy - l + s);
+    // sup. der.
+    SDL_RenderDrawLine(ren, cx + l, cy - l, cx + l - s, cy - l);
+    SDL_RenderDrawLine(ren, cx + l, cy - l, cx + l, cy - l + s);
+    // inf. izq.
+    SDL_RenderDrawLine(ren, cx - l, cy + l, cx - l + s, cy + l);
+    SDL_RenderDrawLine(ren, cx - l, cy + l, cx - l, cy + l - s);
+    // inf. der.
+    SDL_RenderDrawLine(ren, cx + l, cy + l, cx + l - s, cy + l);
+    SDL_RenderDrawLine(ren, cx + l, cy + l, cx + l, cy + l - s);
+  } else {
+    // Flechas hacia dentro: marco completo con puntas.
+    const int l = 6;
+    SDL_Rect marco{cx - l, cy - l, 2 * l + 1, 2 * l + 1};
+    SDL_RenderDrawRect(ren, &marco);
+    SDL_RenderDrawLine(ren, cx - l, cy - l, cx - 2, cy - 2);
+    SDL_RenderDrawLine(ren, cx + l, cy + l, cx + 2, cy + 2);
+  }
+#endif
+}
+
+// Gestiona un clic en coordenadas de ventana.
+void EmuWindow::clic_en(int x, int y) {
+  if (x >= boton_x_ && x < boton_x_ + boton_w_ && y >= boton_y_ &&
+      y < boton_y_ + boton_h_) {
+    siguiente_vista();
+  }
 }
 
 // Pinta la rejilla 80x24 del terminal dentro de `caja`, con sus colores.
@@ -384,7 +452,7 @@ void EmuWindow::poll_alt_enter() {
   const bool now = alt && enter;
   // No basta con `now`: con Alt pulsado, Intro también dispara el fuego en
   // este emulador, así que se exige flanco y Alt para no duplicar.
-  if (now && !alt_enter_was) toggle_fullscreen();
+  if (now && !alt_enter_was) siguiente_vista();
   alt_enter_was = now;
 #endif
 }
@@ -414,8 +482,10 @@ void EmuWindow::present(const uint32_t* rgb, uint8_t leds) {
   SDL_Rect vdst;
   {
     // Sin margen entre el panel y el vídeo: el separador del panel ya marca
-    // la frontera y así el vídeo gana esos píxeles.
-    const int available_w = out_w - panel_w_;
+    // la frontera y así el vídeo gana esos píxeles. En los modos sin panel, el
+    // vídeo dispone de toda la ventana.
+    const int ancho_panel = panel_visible() ? panel_w_ : 0;
+    const int available_w = out_w - ancho_panel;
     const int available_h = out_h;
     if (available_w <= 0 || available_h <= 0) return;
 
@@ -429,16 +499,34 @@ void EmuWindow::present(const uint32_t* rgb, uint8_t leds) {
       const double fmin = fx < fy ? fx : fy;
       const int vw = (int)(w_ * fmin);
       const int vh = (int)(h_ * fmin);
-      vdst = SDL_Rect{panel_w_ + (available_w - vw) / 2, (available_h - vh) / 2,
+      vdst = SDL_Rect{ancho_panel + (available_w - vw) / 2, (available_h - vh) / 2,
                       vw, vh};
     } else {
       const int vw = w_ * f;
       const int vh = h_ * f;
-      vdst = SDL_Rect{panel_w_ + (available_w - vw) / 2, (available_h - vh) / 2,
+      vdst = SDL_Rect{ancho_panel + (available_w - vw) / 2, (available_h - vh) / 2,
                       vw, vh};
     }
   }
   SDL_RenderCopy(ren, tex, nullptr, &vdst);
+
+  // --- Botón de cambio de vista ---
+  //
+  // Se coloca en el margen del vídeo (pegado a su esquina superior izquierda,
+  // justo fuera del framebuffer), no encima de los píxeles. Si no cabe en el
+  // margen de la izquierda, va en el derecho.
+  {
+    const int bw = 30, bh = 26, sep = 4;
+    int bx = vdst.x - bw - sep;
+    if (bx < vdst.x - bw - sep || bx < 2) bx = vdst.x + vdst.w + sep;
+    // En SoloVideo / PantallaCompleta el vídeo puede tocar el borde: se pone
+    // dentro de la esquina, pero sobre el margen si lo hay.
+    if (bx + bw > out_w - 2) bx = out_w - bw - 6;
+    int by = vdst.y + 6;
+    if (by + bh > out_h - 2) by = out_h - bh - 6;
+    if (by < 2) by = 2;
+    dibujar_boton_vista(ren, bx, by, bw, bh, vista_ != Vista::PantallaCompleta);
+  }
 
   // Alto útil del panel: el de la ventana (o el de la pantalla a fullscreen).
   const int area_h = out_h > 0 ? out_h : h_ * scale_;
@@ -449,7 +537,7 @@ void EmuWindow::present(const uint32_t* rgb, uint8_t leds) {
   // con su título y su propio contenido. Para añadir uno nuevo basta con
   // calcular su rectángulo a partir de `y` y restar su alto, que es lo que se
   // hace aquí con la placa de LEDs y el terminal.
-  if (panel_w_ > 0) {
+  if (panel_w_ > 0 && panel_visible()) {
     SDL_Rect panel{0, 0, panel_w_, area_h};
     SDL_SetRenderDrawColor(ren, 34, 37, 43, 255);
     SDL_RenderFillRect(ren, &panel);
@@ -623,6 +711,26 @@ bool EmuWindow::poll() {
       case SDL_QUIT:
         return false;
 
+      // --- Ratón: solo el botón de cambio de vista ---
+      case SDL_MOUSEBUTTONDOWN: {
+        // Las coordenadas del evento vienen en píxeles de ventana, pero el
+        // dibujo usa las del renderer (que con DPI alto son mayores). Se
+        // convierten antes de comparar con la zona del botón.
+        int ww = 0, wh = 0;
+        SDL_GetWindowSize(static_cast<SDL_Window*>(window_), &ww, &wh);
+        int ow = 0, oh = 0;
+        SDL_GetRendererOutputSize(static_cast<SDL_Renderer*>(renderer_), &ow, &oh);
+        const int mx = (ww > 0 && ow > 0) ? ev.button.x * ow / ww : ev.button.x;
+        const int my = (wh > 0 && oh > 0) ? ev.button.y * oh / wh : ev.button.y;
+        if (ev.button.button == SDL_BUTTON_LEFT) {
+          clic_en(mx, my);
+        } else if (ev.button.button == SDL_BUTTON_RIGHT) {
+          // Botón derecho: vuelve a la vista normal desde cualquier modo.
+          set_vista(Vista::Normal);
+        }
+        break;
+      }
+
       // --- Teclado ---
       case SDL_KEYDOWN:
       case SDL_KEYUP: {
@@ -640,7 +748,13 @@ bool EmuWindow::poll() {
           // Pantalla completa. Solo afecta a la ventana: el panel lateral
           // conserva su tamaño y es el vídeo el que se amplía.
           case SDLK_F11:
-            if (down) toggle_fullscreen();
+            if (down) siguiente_vista();
+            break;
+          // Esc: vuelve a la vista normal desde los modos de solo vídeo.
+          // (No se usa para el juego: los juegos leen el joystick, no el
+          // teclado del terminal, que es de solo lectura.)
+          case SDLK_ESCAPE:
+            if (down && vista_ != Vista::Normal) set_vista(Vista::Normal);
             break;
           default: break;
         }

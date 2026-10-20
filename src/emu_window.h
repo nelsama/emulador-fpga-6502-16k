@@ -75,10 +75,19 @@ public:
 
   bool active() const { return active_; }
 
-  // Alterna entre ventana y pantalla completa (F11 o Alt+Intro).
-  // El panel lateral mantiene su tamaño; el que se amplía es el vídeo.
-  void toggle_fullscreen();
-  bool fullscreen() const { return fullscreen_; }
+  // Modos de vista. El panel de depuración solo se ve en el modo Normal.
+  enum class Vista {
+    Normal,        // panel (LEDs, puerto 1, consola) + vídeo
+    SoloVideo,     // sin panel, vídeo grande dentro de la ventana (para jugar)
+    PantallaCompleta,  // sin panel y a pantalla completa del escritorio
+  };
+
+  // Avanza al siguiente modo: Normal -> SoloVideo -> PantallaCompleta -> Normal.
+  void siguiente_vista();
+  // Salta a un modo concreto (lo usan los botones del margen).
+  void set_vista(Vista v);
+  Vista vista() const { return vista_; }
+  bool panel_visible() const { return vista_ == Vista::Normal; }
 
   // Estado actual del joystick en el formato del puerto 1 (activo en bajo).
   uint8_t joy() const { return joy_; }
@@ -98,9 +107,13 @@ private:
   // Dibuja la rejilla del terminal dentro de un rectángulo.
   void dibujar_terminal(void* renderer, const void* caja);
 
-  // Pantalla completa: el vídeo se ajusta a lo máximo que quepa con la
-  // proporción de 320x240; el panel lateral no cambia de tamaño.
+  // Alt+Intro recorre los modos de vista (equivale a F11).
   void poll_alt_enter();
+
+  // Rectángulos de los botones del margen del vídeo (pestaña para cambiar de
+  // modo). Se calculan en cada fotograma junto con el rectángulo del vídeo.
+  void dibujar_boton_vista(void* renderer, int x, int y, int w, int h, bool expandir);
+  void clic_en(int x, int y);
 
   // Ancho mínimo del panel lateral, en píxeles de ventana. El ancho real se
   // calcula en start() para que quepan TERM_COLS columnas de texto; este valor
@@ -116,13 +129,16 @@ private:
   int scale_ = 3;
   int panel_w_ = 0;               // ancho del panel lateral (0 = sin panel)
   bool terminal_ = false;         // módulo del terminal activado
-  bool fullscreen_ = false;       // ventana vs pantalla completa
+  Vista vista_ = Vista::Normal;   // modo de vista actual
   // Último estado del puerto 1 (lo pone main.cpp en cada fotograma).
   uint8_t port1_valor_ = 0xF8;
   uint8_t port1_dir_ = 0x00;
   // Geometría de la ventana antes de pasar a pantalla completa, para
   // restaurarla al salir.
   int win_x_ = 0, win_y_ = 0, win_w_ = 0, win_h_ = 0;
+  // Rectángulo del botón de cambio de vista, en coordenadas de ventana. Se
+  // recalcula al dibujar; el clic lo consulta.
+  int boton_x_ = 0, boton_y_ = 0, boton_w_ = 0, boton_h_ = 0;
   TerminalState term_;            // estado del terminal (80x24)
   uint8_t joy_ = 0xF8; // en reposo: todo a 1 (activo en bajo)
   // Estado de cada fuente por separado, para combinarlas sin que una borre a

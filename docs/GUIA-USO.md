@@ -718,7 +718,8 @@ los bits 0-2 al escribir `$C002`.
 |---|---|---|
 | Mover | Cursores o **WASD** | Stick izquierdo o cruceta |
 | Fuego | **Espacio**, Z, Ctrl izq. o Intro | A, B, X, Y, hombros o gatillos |
-| Pantalla completa | **F11** o Alt+Intro | — |
+| Cambiar de vista (normal / solo vídeo / completa) | **F11** o Alt+Intro | Clic en la pestaña del margen |
+| Volver a la vista normal | **Esc** o clic derecho | — |
 
 Redimensionar y maximizar: ver "Agrandar la ventana / pantalla completa" más
 abajo; en ambos casos solo crece el vídeo.
@@ -766,71 +767,40 @@ manda nada hacia la emulación.
 Si la ventana no cabe en la pantalla (1366×768, portátiles con DPI alto), se
 reduce la escala del vídeo a ×2 automáticamente; el panel lateral nunca baja.
 
-#### Agrandar la ventana / pantalla completa
+#### Vistas: normal / solo video / pantalla completa
 
-| Acción | Cómo |
-|---|---|
-| Maximizar (solo crece el vídeo) | **Botón maximizar** de Windows o doble clic en la barra de título |
-| Redimensionar a mano | Arrastrar los bordes o esquinas |
-| Pantalla completa | **F11** o **Alt+Intro** (sin barra de título ni bordes) |
-| Volver al tamaño original | Botón restaurar, o **F11** si estabas a pantalla completa |
+La ventana tiene **tres modos**, que se recorren con el **botón del margen** del
+vídeo (la pestaña que aparece junto a la esquina superior izquierda del
+framebuffer, fuera de la pantalla de juego), con **F11** o con **Alt+Intro**:
 
-En pantalla completa **solo se amplía el vídeo**, y lo mismo en ventana: el
-panel lateral conserva su tamaño (el justo para 80 columnas de consola) y
-**todo el ancho restante es para el vídeo**, que se escala al mayor factor
-entero que quepa (×2, ×3, ×4…). En una pantalla 1536×864 sale ×3 (960×720). Si
-no cabe a escala entera, se estira manteniendo la proporción 4:3 (sin
-deformar).
+| Modo | Qué se ve | Para qué |
+|---|---|---|
+| **Normal** | panel (LEDs, puerto 1, consola) + vídeo | depurar |
+| **Solo vídeo** | solo el vídeo, grande, dentro de la ventana | jugar sin salir del escritorio |
+| **Pantalla completa** | solo el vídeo, a pantalla completa | jugar |
 
-La ventana arranca ocupando el ancho útil del escritorio y el alto necesario
-para las 24 filas de consola, sin salirse de la pantalla.
+- **Clic izquierdo** en la pestaña: pasa al siguiente modo.
+- **Clic derecho** en cualquier punto: vuelve a **Normal**.
+- **Esc**: vuelve a **Normal** desde los otros dos modos.
+- La pestaña está **en el margen**, no encima de los píxeles del juego: nunca
+  tapa lo que se está viendo.
+- En los modos sin panel, el vídeo usa **toda la ventana** y se escala al mayor
+  factor entero que quepa (×4 = 800×600 en 1536×864).
 
-La ventana tiene un tamaño mínimo igual al de arranque, así que no se puede
-encoger hasta aplastar el panel.
-
-Al salir de pantalla completa se restaura la geometría exacta (tamaño y
-posición) que tenía la ventana.
-
-Para arrancar ya en pantalla completa (lanzadores, scripts):
+Se puede arrancar directamente en pantalla completa:
 
 ```bash
 EMU_FULLSCREEN=1 ./run.sh
 ```
 
-#### Pines del puerto 1 en el panel
+En **Normal**, el panel se lleva solo lo necesario para las 80 columnas de la
+consola y **todo el resto es para el vídeo**, escalado al mayor factor entero que
+quepa (en una pantalla 1536×864 sale ×3, 960×720). Si no cabe a escala entera, se
+estira manteniendo la proporción 4:3.
 
-Entre los LEDs y la consola, el panel muestra el **estado de los 8 pines del
-puerto 1** en el orden del registro (bit 7 arriba). Es la misma información que
-la tabla de `/state.txt`, pero siempre visible:
-
-```
-PUERTO 1 - JOYSTICK (DB9)
-bit pin senal   modo nivel
- 7  29  fuego   IN   ●
- 6  30  arriba  IN   ●
- 5  33  abajo   IN   ●
- 4  34  izq     IN   ●
- 3  40  der     IN   ●
- 2  35  --      OUT  ○
- 1  41  --      OUT  ○
- 0  42  --      OUT  ○
-```
-
-- **pin**: número de patilla en el Tang Nano 9K (de `6502_board.cst`).
-- **senal**: nombre de la señal del joystick; `--` para los bits que no usa.
-- **modo**: `IN` si el programa configuró el bit como entrada (`$C002`), `OUT`
-  si no. El joystick solo funciona con `IN`.
-- **nivel**: relleno = 1, hueco = 0. En el joystick **0 = pulsado** (activo en
-  bajo), así que el indicador azul claro es "suelto" y el ámbar **"pulsado"**.
-
-Si los bits 3-7 no están como entrada aparece el aviso
-**`bits 3-7 no son entrada (falta joy_init)`** en ámbar: el programa leerá 0 en
-el puerto y el joystick no responderá (es el error más común al integrar el
-mando).
-
-Es información de **solo lectura**: se toma de `port1_read()` (lo que ve la CPU)
-
-y `dir1()`, en el mismo fotograma que se pinta.
+Al maximizar la ventana o arrastrar los bordes en modo Normal, solo crece el
+vídeo: el panel conserva su tamaño. Si se reduce el alto, el vídeo baja de
+escala antes que cortarse.
 
 #### LEDs
 
