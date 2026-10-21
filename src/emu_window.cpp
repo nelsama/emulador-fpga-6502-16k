@@ -97,6 +97,20 @@ static constexpr int PANEL_MARGEN = 8;
 // Alto de cada fila del módulo de puerto 1 (compacto: 8 filas caben en poco).
 static constexpr int FILA_P1 = 14;
 
+// Geometría del panel: alto de la franja de estado (placa + LEDs + puerto 1) y
+// del módulo SD para `filas` archivos. Deben coincidir con lo que dibujan
+// panel_cache() y dibujar_modulo_sd(), que son quienes colocan la consola.
+static constexpr int ALTO_ESTADO_PANEL = 12 + 46 + 6 + (30 + 12 + 8 * FILA_P1 + 4) + 6;
+static constexpr int SD_CABECERA = 22;
+static constexpr int SD_MARGEN_INFERIOR = 8;
+
+// Alto mínimo del panel: estado + SD + consola 80x24 + márgenes.
+int alto_panel(int filas_sd) {
+  const int filas = filas_sd < 1 ? 1 : filas_sd;
+  return ALTO_ESTADO_PANEL + (SD_CABECERA + filas * 18 + SD_MARGEN_INFERIOR) +
+         TerminalState::ROWS * 16 + 2 * 8 + 12;
+}
+
 void draw_glyph(SDL_Renderer* r, int x, int y, char c, int f) {
   // La fuente cubre ASCII desde $20. Lo no imprimible se pinta como espacio.
   // `f` es el factor de escala de cada píxel del glifo.
@@ -217,11 +231,13 @@ bool EmuWindow::start(int video_w, int video_h, int scale, bool terminal) {
 
   // Alto: el necesario para que quepan el panel y sus 24 filas de consola.
   // Sin esto, la rejilla se corta por abajo cuando el vídeo es bajo.
-  // El menú es una franja fija encima del panel; la ventana crece lo suyo para
-  // que nadie pierda la consola de 24 filas.
-  const int panel_alto = MENU_H + 12 + 46 + 6 + (30 + 12 + 8 * FILA_P1 + 4) + 6 +
-                         TerminalState::ROWS * TERM_CH + 2 * TERM_PAD + 12;
+  // La franja de la placa va fija arriba; la ventana crece lo suyo para que
+  // nadie pierda la consola de 24 filas.
+  // El módulo SD crece con el número de archivos (máximo 16). La ventana se
+  // dimensiona para el caso actual.
+  const int panel_alto = terminal_ ? alto_panel((int)listado_sd_.size()) : 0;
   if (alto_ventana < panel_alto) alto_ventana = panel_alto;
+  alto_ventana_previo_ = alto_ventana;
 
   // No pasarse de la pantalla: con la barra de tareas y el DPI escalado, una
   // ventana más alta que el escritorio deja parte del vídeo fuera.
@@ -259,7 +275,11 @@ bool EmuWindow::start(int video_w, int video_h, int scale, bool terminal) {
   // Tamano minimo: el panel lateral y el video a la escala calculada. Asi el
   // boton de maximizar (y el arrastre de bordes) siempre amplian el video y
   // nunca aplastan el panel.
-  SDL_SetWindowMinimumSize(win, panel_w_ + w_ / 2, alto_ventana);
+  // Tamano minimo: el panel lateral entero y el video a la escala calculada. El
+  // alto minimo es el del panel con la consola completa, no el del arranque: el
+  // modulo SD crece y mengua con la tarjeta y no debe recortar la consola.
+  const int alto_min = panel_alto > 0 ? panel_alto : alto_ventana;
+  SDL_SetWindowMinimumSize(win, panel_w_ + w_ / 2, alto_min);
 
   SDL_Renderer* ren = SDL_CreateRenderer(win, -1, SDL_RENDERER_ACCELERATED);
   if (!ren) ren = SDL_CreateRenderer(win, -1, SDL_RENDERER_SOFTWARE);
@@ -334,6 +354,39 @@ void EmuWindow::set_vista(Vista v) {
 #endif
 }
 
+void EmuWindow::set_listado_sd(std::vector<ArchivoSd> lista) {
+  listado_sd_ = std::move(lista);
+  fila_borrar_ = -1;
+  // El módulo crece o mengua con la lista; la ventana se ajusta para que la
+  // consola siga viéndose entera (24 filas) sin tocar el tamaño del vídeo.
+  ajustar_alto_ventana();
+}
+
+// La ventana nunca baja del mínimo (el panel completo con la consola 80x24) ni
+// sube por encima del escritorio. Si el mínimo no cabe en pantalla, se respeta
+// el tamaño de la pantalla y la consola se recorta por abajo antes que el vídeo.
+// Se sigue el alto del panel en ambos sentidos: añadir archivos lo hace crecer y
+// borrarlos lo encoge, de modo que la consola siempre se ve entera.
+void EmuWindow::ajustar_alto_ventana() {
+#ifdef HAVE_SDL2
+  if (!active_ || !window_ || !terminal_ || vista_ != Vista::Normal) return;
+  SDL_Window* win = static_cast<SDL_Window*>(window_);
+
+  int ww = 0, wh = 0;
+  SDL_GetWindowSize(win, &ww, &wh);
+  int objetivo = alto_panel((int)listado_sd_.size());
+
+  SDL_Rect usable{0, 0, 0, 0};
+  if (SDL_GetDisplayUsableBounds(0, &usable) == 0 && usable.h > 0) {
+    const int max_alto = usable.h - 100;
+    if (objetivo > max_alto) objetivo = max_alto;
+  }
+  if (objetivo == wh || objetivo == alto_ventana_previo_) return;
+  alto_ventana_previo_ = objetivo;
+  SDL_SetWindowSize(win, ww, objetivo);
+#endif
+}
+
 void EmuWindow::siguiente_vista() {
   switch (vista_) {
     case Vista::Normal:           set_vista(Vista::SoloVideo); break;
@@ -388,37 +441,64 @@ void EmuWindow::dibujar_boton_vista(void* renderer, int x, int y, int w, int h,
 #endif
 }
 
-// Gestiona un clic en coordenadas del renderer.
+// Gestiona un clic en píxeles de ventana (el mismo espacio en que se dibujan
+// las zonas clicables).
 void EmuWindow::clic_en(int x, int y) {
-  // 1) Menú SD: las zonas se generan al dibujar (de la última vuelta).
+  // 1) Diálogo de texto abierto: solo responden sus botones (el campo va por
+  //    teclado). Se comprueban antes que cualquier otra zona.
+  if (dialogo_.activo) {
+    for (const Zona& z : zonas_) {
+      if (x < z.x || x >= z.x + z.w || y < z.y || y >= z.y + z.h) continue;
+      if (z.accion == "dialogo_ok") {
+        dialogo_.activo = false;
+        if (on_sd_accion) {
+          on_sd_accion(dialogo_.accion + "_ok", dialogo_.arg + '\n' + dialogo_.texto);
+        }
+        return;
+      }
+      if (z.accion == "dialogo_cancelar") {
+        dialogo_.activo = false;
+        return;
+      }
+    }
+    return;
+  }
+
+  // 2) Módulo SD: las zonas se generan al dibujar (de la última vuelta).
   if (panel_visible()) {
     for (const Zona& z : zonas_) {
       if (x < z.x || x >= z.x + z.w || y < z.y || y >= z.y + z.h) continue;
-      if (z.accion == "menu_toggle") {
-        if (menu_ == MenuEstado::Abierto) {
-          menu_ = MenuEstado::Cerrado;
-        } else {
-          menu_ = MenuEstado::Abierto;
-          // Al abrir se pide el listado actualizado de la tarjeta.
-          if (on_sd_accion) on_sd_accion("list", "");
+      if (z.accion == "borrar_pedir") {
+        // Primer clic: pide confirmación (la fila se pinta en rojo como SEG).
+        for (size_t i = 0; i < listado_sd_.size(); i++) {
+          if (listado_sd_[i].nombre == z.arg) fila_borrar_ = (int)i;
         }
-      } else if (z.accion == "delete_archivo") {
+      } else if (z.accion == "borrar_confirmar") {
+        fila_borrar_ = -1;
         if (on_sd_accion) on_sd_accion("delete", z.arg);
-        menu_ = MenuEstado::Cerrado;
+      } else if (z.accion == "rename_archivo") {
+        dialogo_.activo = true;
+        dialogo_.titulo = "Nuevo nombre para " + z.arg;
+        dialogo_.texto = z.arg;
+        dialogo_.seleccionado = true;
+        // Se arranca con el nombre completo seleccionado: teclear directamente
+        // sustituye lo que hubiera (como en cualquier renombrador).
+        dialogo_.accion = "rename";
+        dialogo_.arg = z.arg;
       } else {
+        fila_borrar_ = -1;
         if (on_sd_accion) on_sd_accion(z.accion, z.arg);
-        menu_ = MenuEstado::Cerrado;
       }
       return;
     }
-    // Clic dentro del panel, fuera del menú: se cierra el desplegable.
-    if (menu_ == MenuEstado::Abierto && x < panel_w_) {
-      menu_ = MenuEstado::Cerrado;
+    // Clic en cualquier otro sitio del panel: se cancela la confirmación.
+    if (fila_borrar_ >= 0) {
+      fila_borrar_ = -1;
       return;
     }
   }
 
-  // 2) Botón de cambio de vista.
+  // 3) Botón de cambio de vista.
   if (x >= boton_x_ && x < boton_x_ + boton_w_ && y >= boton_y_ &&
       y < boton_y_ + boton_h_) {
     siguiente_vista();
@@ -509,40 +589,72 @@ void EmuWindow::dibujar_terminal(void* renderer, const void* caja) {
 void* EmuWindow::panel_cache(int x, int y, uint8_t leds) {
 #ifdef HAVE_SDL2
   SDL_Renderer* ren = static_cast<SDL_Renderer*>(renderer_);
-  const int alto = 12 + 46 + 6 + (30 + 12 + 8 * FILA_P1 + 4) + 6;
+  const int alto = ALTO_ESTADO_PANEL;
 
   if (!panel_tex_ || panel_tex_w_ != panel_w_ || panel_tex_h_ != alto) {
     if (panel_tex_) SDL_DestroyTexture(static_cast<SDL_Texture*>(panel_tex_));
     panel_tex_ = SDL_CreateTexture(ren, SDL_PIXELFORMAT_ARGB8888,
-                                   SDL_TEXTUREACCESS_TARGET, panel_w_, alto);
+                                   SDL_TEXTUREACCESS_STREAMING, panel_w_, alto);
     panel_tex_w_ = panel_w_;
     panel_tex_h_ = alto;
     cache_valida_ = false;
   }
   if (!panel_tex_) return nullptr;
 
+  const bool modo = (port1_dir_ & 0xF8) != 0;  // algún bit del joystick de entrada
   const bool cambia = !cache_valida_ || leds != cache_leds_ ||
-                      port1_valor_ != cache_p1v_ || port1_dir_ != cache_p1d_;
+                      port1_valor_ != cache_p1v_ || port1_dir_ != cache_p1d_ ||
+                      modo != cache_modo_;
   if (cambia) {
     cache_valida_ = true;
     cache_leds_ = leds;
     cache_p1v_ = port1_valor_;
     cache_p1d_ = port1_dir_;
+    cache_modo_ = modo;
 
-    SDL_SetRenderTarget(ren, static_cast<SDL_Texture*>(panel_tex_));
+    // El panel se compone en una superficie en memoria con un renderer
+    // software, no con una textura de destino del renderer principal: en el
+    // backend Direct3D, cambiar el render target a mitad de fotograma descarta
+    // lo que ya estaba pintado en el búfer actual (el panel salía en negro).
+    SDL_Surface* surf = SDL_CreateRGBSurfaceWithFormat(
+        0, panel_w_, alto, 32, SDL_PIXELFORMAT_ARGB8888);
+    if (!surf) return panel_tex_;
+    SDL_Renderer* sr = SDL_CreateSoftwareRenderer(surf);
+    if (!sr) {
+      SDL_FreeSurface(surf);
+      return panel_tex_;
+    }
+    ren = sr;  // a partir de aquí se dibuja en la superficie
+
     SDL_SetRenderDrawColor(ren, 34, 37, 43, 255);
     SDL_RenderClear(ren);
 
     int y = 12;  // cursor vertical dentro del panel
 
-    // --- Placa Tang Nano 9K con sus 6 LEDs ---
+    // La etiqueta va a la IZQUIERDA de la placa, en el margen del panel (no
+    // dentro de la placa ni encima de los LEDs). Si el panel fuese demasiado
+    // estrecho para dejarla al lado, se omite antes que solaparla con ellos.
     const int board_w = 6 * 30 + 34;
     const int board_h = 46;
-    const int board_x = (panel_w_ - board_w) / 2;
+    // El ancho total del módulo incluye la etiqueta a la izquierda: así el
+    // bloque queda centrado como un todo y no se desborda del panel.
+    const int etiqueta_w = 4 * TERM_CW + 8;
+    const int block_w = board_w + etiqueta_w;
+    const int block_x = (panel_w_ - block_w) / 2;
+    const int board_x = block_x + etiqueta_w;
     SDL_Rect board{board_x, y, board_w, board_h};
     fill_round_rect(ren, board, 8, SDL_Color{18, 40, 30, 255});
     SDL_SetRenderDrawColor(ren, 30, 70, 52, 255);
     SDL_RenderDrawRect(ren, &board);
+    if (block_x >= 2) {
+      static const char* etiqueta = "LEDS";
+      const int ey = y + board_h / 2 - 4;
+      const int ex = block_x;
+      SDL_SetRenderDrawColor(ren, 120, 165, 140, 255);
+      for (int c = 0; c < 4; c++) {
+        draw_glyph(ren, ex + c * TERM_CW, ey, etiqueta[c], TERM_SCALE);
+      }
+    }
 
     {
       const int radius = 7;
@@ -596,16 +708,25 @@ void* EmuWindow::panel_cache(int x, int y, uint8_t leds) {
 
       const int xcol = mx + 10;
       const int cw = TERM_CW;
+      // El panel no se sale de su módulo: con coordenadas negativas (panel
+      // estrecho) los rectángulos caerían fuera de la textura y no se verían.
+      SDL_RenderSetClipRect(ren, &mod);
+      // `port1_valor_` es lo que devuelve la lectura del puerto: con los bits
+      // configurados como SALIDA repite lo que escribió la CPU. Para el panel lo
+      // útil es el estado de los pines de entrada digital, que es lo que lee un
+      // programa que haya hecho joy_init (puerto como entrada).
+      const uint8_t entradas = (uint8_t)(port1_valor_ & port1_dir_);
       for (int i = 0; i < 8; i++) {
         const Fila& f = filas[i];
         const int ly = y0 + 14 + i * FILA_P1;
-        const bool entrada = (port1_dir_ >> f.bit) & 1;
-        const bool nivel = (port1_valor_ >> f.bit) & 1;
+        const bool salida = ((port1_dir_ >> f.bit) & 1) == 0;
+        const bool nivel = salida ? ((port1_valor_ >> f.bit) & 1)
+                                  : ((entradas >> f.bit) & 1);
         const bool es_joy = f.bit >= 3;
 
         char linea[64];
         std::snprintf(linea, sizeof linea, "%d   %2d  %-7s %-6s", f.bit, f.pin,
-                      f.senal, entrada ? "IN" : "OUT");
+                      f.senal, salida ? "OUT" : "IN");
         if (es_joy) SDL_SetRenderDrawColor(ren, 200, 215, 230, 255);
         else        SDL_SetRenderDrawColor(ren, 110, 120, 135, 255);
         for (int c = 0; linea[c]; c++) {
@@ -615,8 +736,7 @@ void* EmuWindow::panel_cache(int x, int y, uint8_t leds) {
         const int bx = xcol + 23 * cw;
         const int by = ly + 4;
         if (nivel) {
-          if (es_joy && entrada && !nivel) SDL_SetRenderDrawColor(ren, 255, 170, 60, 255);
-          else SDL_SetRenderDrawColor(ren, 90, 220, 140, 255);
+          SDL_SetRenderDrawColor(ren, 90, 220, 140, 255);
           fill_circle(ren, bx, by, 5);
         } else {
           SDL_SetRenderDrawColor(ren, 60, 70, 84, 255);
@@ -625,9 +745,13 @@ void* EmuWindow::panel_cache(int x, int y, uint8_t leds) {
           fill_circle(ren, bx, by, 3);
         }
       }
+      SDL_RenderSetClipRect(ren, nullptr);
     }
 
-    SDL_SetRenderTarget(ren, nullptr);
+    SDL_DestroyRenderer(sr);
+    SDL_UpdateTexture(static_cast<SDL_Texture*>(panel_tex_), nullptr, surf->pixels,
+                      surf->pitch);
+    SDL_FreeSurface(surf);
   }
   (void)x;
   (void)y;
@@ -638,88 +762,176 @@ void* EmuWindow::panel_cache(int x, int y, uint8_t leds) {
 #endif
 }
 
-// Barra de menú SD, arriba del panel.
+// Módulo SD del panel: cabecera con "+ Anadir" y una fila por archivo con sus
+// botones (renombrar / borrar). Alto variable: crece con el número de archivos
+// hasta el máximo de la tarjeta (16).
 //
-// Franja fija de MENU_H px con dos "botones" (SD y Ver) y, al pulsar SD, un
-// desplegable debajo. Todo es clicable con el ratón: cada elemento se apunta
-// en `zonas_` y `clic_en()` comprueba esas zonas además del botón de vista.
-void EmuWindow::dibujar_menu(void* renderer, int /*alto_panel*/) {
+// Devuelve el alto que ocupa; present() lo usa para colocar la consola debajo.
+int EmuWindow::dibujar_modulo_sd(void* renderer, int x, int y) {
 #ifdef HAVE_SDL2
   SDL_Renderer* ren = static_cast<SDL_Renderer*>(renderer);
-  zonas_.clear();
+  // Las zonas se regeneran en cada vuelta: `present()` limpia la lista una vez
+  // por fotograma, antes de dibujar el módulo y el diálogo.
+  const int n = (int)listado_sd_.size();
+  const int filas = n < 1 ? 1 : n;   // con la tarjeta vacía, una fila de aviso
+  const int cab = 22;                // cabecera con el botón
+  const int alto = cab + filas * FILA_SD + 8;
 
-  // Fondo de la barra.
-  SDL_Rect barra{0, 0, panel_w_, MENU_H};
-  SDL_SetRenderDrawColor(ren, 44, 48, 56, 255);
-  SDL_RenderFillRect(ren, &barra);
-  SDL_SetRenderDrawColor(ren, 62, 68, 78, 255);
-  SDL_RenderDrawLine(ren, 0, MENU_H - 1, panel_w_, MENU_H - 1);
+  SDL_Rect mod{x, y, panel_w_ - 2 * PANEL_MARGEN, alto};
+  fill_round_rect(ren, mod, 6, SDL_Color{24, 28, 34, 255});
+  SDL_SetRenderDrawColor(ren, 44, 50, 60, 255);
+  SDL_RenderDrawRect(ren, &mod);
 
-  auto texto = [&](int x, int y, const char* t, SDL_Color c) {
+  auto texto = [&](int tx, int ty, const std::string& t, SDL_Color c) {
     SDL_SetRenderDrawColor(ren, c.r, c.g, c.b, 255);
-    for (int i = 0; t[i]; i++) draw_glyph(ren, x + i * TERM_CW, y, t[i], TERM_SCALE);
+    for (size_t i = 0; i < t.size(); i++) {
+      draw_glyph(ren, tx + (int)i * TERM_CW, ty, t[i], TERM_SCALE);
+    }
   };
 
-  auto boton = [&](int x, const char* etiqueta, bool activo,
-                   const std::string& accion) {
-    const int w = (int)std::strlen(etiqueta) * TERM_CW + 16;
-    SDL_Rect r{x, 2, w, MENU_H - 5};
-    if (activo) {
-      SDL_SetRenderDrawColor(ren, 70, 78, 92, 255);
-      SDL_RenderFillRect(ren, &r);
+  // Cabecera: título y botones "Remontar" y "+ Anadir".
+  texto(x + 10, y + 5, "SD", SDL_Color{120, 140, 165, 255});
+  {
+    const int bw = 9 * TERM_CW + 12;
+    SDL_Rect b{x + mod.w - bw - 8, y + 3, bw, 16};
+    SDL_SetRenderDrawColor(ren, 44, 78, 58, 255);
+    SDL_RenderFillRect(ren, &b);
+    SDL_SetRenderDrawColor(ren, 90, 200, 130, 255);
+    SDL_RenderDrawRect(ren, &b);
+    texto(b.x + 6, b.y + 1, "+ Anadir", SDL_Color{190, 240, 205, 255});
+    zonas_.push_back(Zona{b.x, b.y, b.w, b.h, "add", ""});
+
+    // El monitor del FPGA cachea el directorio al hacer `SD`: tras tocar la
+    // imagen hay que mandarle `sd\r` por el UART para que lo relea. Se hace
+    // solo tras cada cambio, pero el boton queda por si se toca la tarjeta
+    // por fuera (herramientas, otro emulador, la propia CPU).
+    const int rw = 8 * TERM_CW + 12;
+    SDL_Rect r{b.x - rw - 6, y + 3, rw, 16};
+    SDL_SetRenderDrawColor(ren, 46, 58, 84, 255);
+    SDL_RenderFillRect(ren, &r);
+    SDL_SetRenderDrawColor(ren, 110, 150, 220, 255);
+    SDL_RenderDrawRect(ren, &r);
+    texto(r.x + 6, r.y + 1, "Remontar", SDL_Color{200, 220, 250, 255});
+    zonas_.push_back(Zona{r.x, r.y, r.w, r.h, "remount", ""});
+  }
+
+  if (n == 0) {
+    texto(x + 10, y + cab + 2, "(vacia)", SDL_Color{130, 140, 155, 255});
+  }
+
+  for (int i = 0; i < n; i++) {
+    const ArchivoSd& a = listado_sd_[(size_t)i];
+    const int fy = y + cab + i * FILA_SD;
+    SDL_Rect fila{x + 4, fy, mod.w - 8, FILA_SD};
+    if (i == fila_resaltada_) {
+      SDL_SetRenderDrawColor(ren, 44, 50, 62, 255);
+      SDL_RenderFillRect(ren, &fila);
     }
-    texto(x + 8, 4, etiqueta, {220, 228, 240, 255});
-    zonas_.push_back(Zona{x, 2, w, MENU_H - 5, accion, ""});
-    return x + w;
+    texto(x + 10, fy + 2, a.nombre, SDL_Color{200, 212, 228, 255});
+    char tam[24];
+    std::snprintf(tam, sizeof tam, "%u", a.bytes);
+    texto(x + 10 + 14 * TERM_CW, fy + 2, tam, SDL_Color{130, 142, 160, 255});
+
+    // Botones de la fila. Se dibujan con texto porque la fuente CP437 no
+    // tiene iconos: REN (renombrar) y DEL/SEG (borrar / confirmar borrado).
+    const int bx = x + mod.w - 14 - 2 * (BOTON_SD + 4);
+    {
+      SDL_Rect b{bx, fy + 1, BOTON_SD, FILA_SD - 2};
+      SDL_SetRenderDrawColor(ren, 56, 66, 86, 255);
+      SDL_RenderFillRect(ren, &b);
+      texto(b.x + 3, b.y + 1, "REN", SDL_Color{200, 215, 235, 255});
+      zonas_.push_back(Zona{b.x, b.y, b.w, b.h, "rename_archivo", a.nombre});
+    }
+    {
+      SDL_Rect b{bx + BOTON_SD + 4, fy + 1, BOTON_SD, FILA_SD - 2};
+      const bool confirmar = (fila_borrar_ == i);
+      SDL_SetRenderDrawColor(ren, confirmar ? 130 : 56, confirmar ? 44 : 66,
+                             confirmar ? 44 : 86, 255);
+      SDL_RenderFillRect(ren, &b);
+      texto(b.x + 3, b.y + 1, confirmar ? "SEG" : "DEL",
+            confirmar ? SDL_Color{255, 210, 210, 255}
+                      : SDL_Color{230, 200, 200, 255});
+      zonas_.push_back(Zona{b.x, b.y, b.w, b.h,
+                            confirmar ? "borrar_confirmar" : "borrar_pedir",
+                            a.nombre});
+    }
+  }
+
+  alto_modulo_sd_ = alto;
+  return alto;
+#else
+  (void)renderer;
+  (void)x;
+  (void)y;
+  return 0;
+#endif
+}
+
+// Diálogo de entrada de texto (SDL no trae uno). Se dibuja sobre el panel:
+// Enter acepta, Esc cancela y Retroceso borra.
+void EmuWindow::dibujar_dialogo(void* renderer) {
+#ifdef HAVE_SDL2
+  if (!dialogo_.activo) return;
+  SDL_Renderer* ren = static_cast<SDL_Renderer*>(renderer);
+
+  auto texto = [&](int tx, int ty, const std::string& t, SDL_Color c) {
+    SDL_SetRenderDrawColor(ren, c.r, c.g, c.b, 255);
+    for (size_t i = 0; i < t.size(); i++) {
+      draw_glyph(ren, tx + (int)i * TERM_CW, ty, t[i], TERM_SCALE);
+    }
   };
 
-  int x = 6;
-  boton(x, "SD", menu_ == MenuEstado::Abierto, "menu_toggle");
+  const int w = panel_w_ - 40;
+  const int h = 74;
+  const int x = 20;
+  // Se coloca sobre el módulo SD (que es de quien parten las acciones) y pegado
+  // a su borde superior: así no tapa el puerto 1 y los botones quedan cerca de
+  // la fila que se está editando.
+  int y = ALTO_ESTADO_PANEL + 4;
+  SDL_Rect caja{x, y, w, h};
+  SDL_SetRenderDrawColor(ren, 40, 44, 54, 255);
+  SDL_RenderFillRect(ren, &caja);
+  SDL_SetRenderDrawColor(ren, 120, 134, 160, 255);
+  SDL_RenderDrawRect(ren, &caja);
 
-  if (menu_ == MenuEstado::Abierto) {
-    // Desplegable debajo de la barra, con las acciones y el listado.
-    struct Opcion { const char* etiqueta; const char* accion; };
-    static const Opcion opciones[] = {
-        {"Anadir archivo...", "add"},
-        {"Borrar archivo...", "delete"},
-        {"Re-montar SD", "remount"},
-    };
-    const int n_op = 3;
-    const int n_lista = (int)listado_sd_.size();
-    const int filas = n_op + 1 + (n_lista > 0 ? n_lista : 1);
-    const int ancho = 300;
-    const int alto = filas * 18 + 12;
-    SDL_Rect caja{PANEL_MARGEN, MENU_H + 2, ancho, alto};
-    SDL_SetRenderDrawColor(ren, 34, 38, 46, 250);
-    SDL_RenderFillRect(ren, &caja);
-    SDL_SetRenderDrawColor(ren, 90, 100, 118, 255);
-    SDL_RenderDrawRect(ren, &caja);
+  texto(x + 10, y + 8, dialogo_.titulo, SDL_Color{210, 220, 235, 255});
 
-    int y = MENU_H + 8;
-    for (int i = 0; i < n_op; i++) {
-      texto(PANEL_MARGEN + 10, y, opciones[i].etiqueta, {215, 222, 235, 255});
-      zonas_.push_back(Zona{PANEL_MARGEN, y - 3, ancho, 18, opciones[i].accion, ""});
-      y += 18;
-    }
-    // Separador y listado de archivos.
-    SDL_SetRenderDrawColor(ren, 70, 78, 92, 255);
-    SDL_RenderDrawLine(ren, PANEL_MARGEN + 6, y + 2, PANEL_MARGEN + ancho - 6, y + 2);
-    y += 8;
-    if (n_lista == 0) {
-      texto(PANEL_MARGEN + 10, y, "(lista vacia: pulsa Re-montar)", {140, 150, 165, 255});
-    }
-    for (int i = 0; i < n_lista && i < 16; i++) {
-      const ArchivoSd& a = listado_sd_[(size_t)i];
-      // Nombre a la izquierda y tamaño a la derecha.
-      texto(PANEL_MARGEN + 10, y, a.nombre.c_str(), {200, 212, 228, 255});
-      char tam[24];
-      std::snprintf(tam, sizeof tam, "%u", a.bytes);
-      const int tw = (int)std::strlen(tam) * TERM_CW;
-      texto(caja.x + ancho - 12 - tw, y, tam, {140, 152, 170, 255});
-      zonas_.push_back(Zona{PANEL_MARGEN, y - 3, ancho, 18, "delete_archivo",
-                           a.nombre});
-      y += 18;
-    }
+  SDL_Rect campo{x + 10, y + 28, w - 20, 20};
+  SDL_SetRenderDrawColor(ren, 18, 20, 26, 255);
+  SDL_RenderFillRect(ren, &campo);
+  SDL_SetRenderDrawColor(ren, 90, 105, 130, 255);
+  SDL_RenderDrawRect(ren, &campo);
+  texto(campo.x + 6, campo.y + 2, dialogo_.texto + "_", SDL_Color{235, 240, 250, 255});
+  if (dialogo_.seleccionado) {
+    // Marca del texto seleccionado (que se sustituye al teclear).
+    const int tw = (int)dialogo_.texto.size() * TERM_CW;
+    SDL_SetRenderDrawColor(ren, 90, 120, 190, 255);
+    SDL_RenderDrawLine(ren, campo.x + 6, campo.y + 17, campo.x + 6 + tw, campo.y + 17);
+  }
+
+  texto(x + 10, y + 54, "Enter=aceptar  Esc=cancelar",
+        SDL_Color{140, 152, 170, 255});
+
+  // Botones con el ratón: el teclado no siempre llega (y no hace falta para
+  // nada más de la ventana). Las zonas se buscan ANTES que las del módulo SD.
+  {
+    const int bw = 7 * TERM_CW + 16;
+    const int by = y + h - 24;
+    SDL_Rect ok{w - bw - 10, by, bw, 18};
+    SDL_SetRenderDrawColor(ren, 44, 78, 58, 255);
+    SDL_RenderFillRect(ren, &ok);
+    SDL_SetRenderDrawColor(ren, 90, 200, 130, 255);
+    SDL_RenderDrawRect(ren, &ok);
+    texto(ok.x + 8, ok.y + 1, "Aceptar", SDL_Color{190, 240, 205, 255});
+    zonas_.push_back(Zona{ok.x, ok.y, ok.w, ok.h, "dialogo_ok", ""});
+
+    SDL_Rect no{ok.x - bw - 8, by, bw, 18};
+    SDL_SetRenderDrawColor(ren, 60, 44, 48, 255);
+    SDL_RenderFillRect(ren, &no);
+    SDL_SetRenderDrawColor(ren, 200, 110, 120, 255);
+    SDL_RenderDrawRect(ren, &no);
+    texto(no.x + 8, no.y + 1, "Cancelar", SDL_Color{240, 205, 210, 255});
+    zonas_.push_back(Zona{no.x, no.y, no.w, no.h, "dialogo_cancelar", ""});
   }
 #endif
 }
@@ -747,6 +959,12 @@ void EmuWindow::present(const uint32_t* rgb, uint8_t leds) {
   SDL_Texture* tex = static_cast<SDL_Texture*>(texture_);
 
   SDL_UpdateTexture(tex, nullptr, rgb, w_ * (int)sizeof(uint32_t));
+
+  // La caché del panel se regenera ANTES de empezar el fotograma: cambiar el
+  // render target a mitad de dibujo obliga al backend (Direct3D) a descartar lo
+  // que ya estaba pintado en el búfer actual y el panel salía en negro.
+  void* tex_panel_top = nullptr;
+  if (panel_w_ > 0 && panel_visible()) tex_panel_top = panel_cache(0, 0, leds);
 
   // Fondo general del panel (gris oscuro tipo escritorio).
   SDL_SetRenderDrawColor(ren, 28, 30, 34, 255);
@@ -832,18 +1050,26 @@ void EmuWindow::present(const uint32_t* rgb, uint8_t leds) {
     // Placa + LEDs + puerto 1 van cacheados en una textura: son cientos de
     // llamadas SDL que solo cambian cuando cambia el hardware. La consola va
     // aparte, en su propia textura.
-    const int alto_estado = 12 + 46 + 6 + (30 + 12 + 8 * FILA_P1 + 4) + 6;
-    if (void* tex_panel = panel_cache(0, 0, leds)) {
-      SDL_Rect dst{0, MENU_H, panel_w_, alto_estado};
-      SDL_RenderCopy(ren, static_cast<SDL_Texture*>(tex_panel), nullptr, &dst);
+    const int alto_estado = ALTO_ESTADO_PANEL;
+    if (tex_panel_top) {
+      SDL_Rect dst{0, 0, panel_w_, alto_estado};
+      SDL_RenderCopy(ren, static_cast<SDL_Texture*>(tex_panel_top), nullptr, &dst);
     }
+
+    // Módulo SD, entre el puerto 1 y la consola. Su alto depende del número de
+    // archivos, así que se dibuja antes de colocarla.
+    // Las zonas clicables se regeneran aquí: `present()` es el único sitio que
+    // las rellena y `clic_en()` las consume en la misma vuelta.
+    zonas_.clear();
+    const int alto_sd = dibujar_modulo_sd(ren, PANEL_MARGEN, alto_estado);
+    const int y_consola = alto_estado + alto_sd;
 
     // --- Módulo 3: terminal del UART (80x24, ANSI + CP437) ---
     if (terminal_) {
       const int term_x = PANEL_MARGEN;
       const int term_w = panel_w_ - 2 * PANEL_MARGEN;
       const int term_h = TerminalState::ROWS * TERM_CH + 2 * TERM_PAD;  // 80x24 fijo
-      const int term_y = MENU_H + alto_estado;
+      const int term_y = y_consola;
       SDL_Rect term{term_x, term_y, term_w, term_h};
       SDL_SetRenderDrawColor(ren, 8, 10, 12, 255);
       SDL_RenderFillRect(ren, &term);
@@ -854,9 +1080,8 @@ void EmuWindow::present(const uint32_t* rgb, uint8_t leds) {
     }
   }
 
-  // La barra de menú se pinta AL FINAL: el desplegable tiene que quedar por
-  // encima de la placa y de la consola, no debajo.
-  if (panel_w_ > 0 && panel_visible()) dibujar_menu(ren, area_h);
+  // El diálogo de texto, si está activo, se pinta al final (encima de todo).
+  if (panel_w_ > 0 && panel_visible()) dibujar_dialogo(ren);
   SDL_RenderPresent(ren);
 #endif
 }
@@ -881,19 +1106,15 @@ bool EmuWindow::poll() {
       case SDL_QUIT:
         return false;
 
-      // --- Ratón: solo el botón de cambio de vista ---
+      // --- Ratón: módulo SD, diálogo y botón de cambio de vista ---
       case SDL_MOUSEBUTTONDOWN: {
-        // Las coordenadas del evento vienen en píxeles de ventana, pero el
-        // dibujo usa las del renderer (que con DPI alto son mayores). Se
-        // convierten antes de comparar con la zona del botón.
-        int ww = 0, wh = 0;
-        SDL_GetWindowSize(static_cast<SDL_Window*>(window_), &ww, &wh);
-        int ow = 0, oh = 0;
-        SDL_GetRendererOutputSize(static_cast<SDL_Renderer*>(renderer_), &ow, &oh);
-        const int mx = (ww > 0 && ow > 0) ? ev.button.x * ow / ww : ev.button.x;
-        const int my = (wh > 0 && oh > 0) ? ev.button.y * oh / wh : ev.button.y;
+        // Las zonas se guardan en píxeles de VENTANA (el área cliente), que es
+        // el espacio en el que las dibuja el renderer. Las coordenadas del
+        // evento ya vienen en ese espacio: NO hay que reescalarlas (con DPI
+        // 125% el búfer de salida es mayor que la ventana y el clic acababa
+        // cayendo en otra fila).
         if (ev.button.button == SDL_BUTTON_LEFT) {
-          clic_en(mx, my);
+          clic_en(ev.button.x, ev.button.y);
         } else if (ev.button.button == SDL_BUTTON_RIGHT) {
           // Botón derecho: vuelve a la vista normal desde cualquier modo.
           set_vista(Vista::Normal);
@@ -906,6 +1127,43 @@ bool EmuWindow::poll() {
       case SDL_KEYUP: {
         const bool down = (ev.type == SDL_KEYDOWN);
         uint8_t& t = in.teclado;
+
+        // Diálogo de texto abierto: el teclado es para el campo, no para el
+        // joystick. Enter acepta, Esc cancela, Retroceso borra.
+        if (dialogo_.activo) {
+          if (!down) break;
+          // Al primer carácter se descarta el nombre viejo: el campo arranca
+          // seleccionado para no tener que borrarlo a mano.
+          auto escribir = [&](char c) {
+            if (dialogo_.seleccionado) {
+              dialogo_.texto.clear();
+              dialogo_.seleccionado = false;
+            }
+            if (dialogo_.texto.size() < 12) dialogo_.texto.push_back(c);
+          };
+          if (ev.key.keysym.sym == SDLK_RETURN ||
+              ev.key.keysym.sym == SDLK_KP_ENTER) {
+            dialogo_.activo = false;
+            if (on_sd_accion) {
+              on_sd_accion(dialogo_.accion + "_ok",
+                           dialogo_.arg + '\n' + dialogo_.texto);
+            }
+          } else if (ev.key.keysym.sym == SDLK_ESCAPE) {
+            dialogo_.activo = false;
+          } else if (ev.key.keysym.sym == SDLK_BACKSPACE) {
+            if (dialogo_.seleccionado) {
+              dialogo_.texto.clear();
+              dialogo_.seleccionado = false;
+            } else if (!dialogo_.texto.empty()) {
+              dialogo_.texto.pop_back();
+            }
+          } else if (ev.key.keysym.sym >= 32 && ev.key.keysym.sym < 127) {
+            char c = (char)ev.key.keysym.sym;
+            if (c >= 'a' && c <= 'z') c = (char)(c - 32);
+            escribir(c);
+          }
+          break;
+        }
         switch (ev.key.keysym.sym) {
           // Cruceta: cursores y WASD.
           case SDLK_UP:    case SDLK_w: in.set(t, Gpio::JOY_UP, down);    break;

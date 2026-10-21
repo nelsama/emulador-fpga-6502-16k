@@ -78,6 +78,28 @@ int main() {
   ok("ya no aparece tras borrar", !sigue);
   ok("borrar inexistente falla", !sd.borrar_archivo("NOEXISTE.BIN", &err));
 
+  // 5b. Renombrar.
+  sd.agregar_archivo("VIEJO.BIN", datos, &err);
+  ok("renombrar existente", sd.renombrar_archivo("VIEJO.BIN", "NUEVO.BIN", &err));
+  bool hay_nuevo = false, hay_viejo = false;
+  for (auto& e : sd.listar_archivos()) {
+    if (e.nombre == "NUEVO.BIN") hay_nuevo = true;
+    if (e.nombre == "VIEJO.BIN") hay_viejo = true;
+  }
+  ok("aparece con el nombre nuevo", hay_nuevo);
+  ok("ya no aparece con el viejo", !hay_viejo);
+  ok("renombrar a existente falla",
+     !sd.renombrar_archivo("NUEVO.BIN", "JUEGO.BIN", &err));
+  ok("renombrar inexistente falla",
+     !sd.renombrar_archivo("NOEXISTE.BIN", "X.BIN", &err));
+  ok("nombre invalido al renombrar",
+     !sd.renombrar_archivo("NUEVO.BIN", "NOMBREMUYLARGO.BIN", &err));
+  // Renombrar no debe perder el contenido ni el tamaño.
+  for (auto& e : sd.listar_archivos()) {
+    if (e.nombre == "NUEVO.BIN") ok("renombrar conserva el tamano", e.bytes == 100);
+  }
+  sd.borrar_archivo("NUEVO.BIN", &err);
+
   // 6. Los bytes escritos son los mismos (se leen a través de la imagen).
   sd.save();
   FILE* f = std::fopen(img.c_str(), "rb");

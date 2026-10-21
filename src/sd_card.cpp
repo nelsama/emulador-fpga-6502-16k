@@ -273,6 +273,39 @@ bool SdCardImpl::agregar_archivo(const std::string& nombre_in,
   return true;
 }
 
+bool SdCardImpl::renombrar_archivo(const std::string& viejo_in,
+                                   const std::string& nuevo_in,
+                                   std::string* error) {
+  auto fallo = [&](const char* msg) {
+    if (error) *error = msg;
+    return false;
+  };
+  if (!mounted_ || img_.size() < 1024) return fallo("no hay tarjeta montada");
+  const std::string viejo = normalizar_nombre(viejo_in);
+  const std::string nuevo = normalizar_nombre(nuevo_in);
+  if (viejo.empty() || nuevo.empty()) return fallo("nombre no valido");
+
+  // No se permite duplicar un nombre existente.
+  uint8_t* entrada = nullptr;
+  for (int i = 0; i < MAX_ENTRADAS; i++) {
+    uint8_t* e = img_.data() + kTablaOffset + i * kEntradaBytes;
+    if (e[0] == 0) continue;
+    char actual[13] = {0};
+    std::memcpy(actual, e, 12);
+    const std::string nombre(actual);
+    if (nombre == viejo) entrada = e;
+    if (nombre == nuevo && nombre != viejo) return fallo("ya existe un archivo con ese nombre");
+  }
+  if (!entrada) return fallo("no existe");
+  if (viejo == nuevo) return true;
+
+  // Se reescribe solo el campo nombre; sector y tamano no cambian.
+  std::memset(entrada, 0, 12);
+  std::memcpy(entrada, nuevo.data(), nuevo.size());
+  flush_sector(0);
+  return true;
+}
+
 bool SdCardImpl::borrar_archivo(const std::string& nombre_in, std::string* error) {
   auto fallo = [&](const char* msg) {
     if (error) *error = msg;

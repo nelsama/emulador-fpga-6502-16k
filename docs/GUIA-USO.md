@@ -231,12 +231,15 @@ Añadir un archivo a la SD **con el emulador en marcha**:
 curl --data-binary @JUEGO.BIN "http://localhost:8080/sdcard/write?name=JUEGO.BIN"
 curl "http://localhost:8080/sdcard/ls"
 curl "http://localhost:8080/sdcard/delete?name=JUEGO.BIN"
+curl "http://localhost:8080/sdcard/rename?name=JUEGO.BIN&to=JUEGO2.BIN"
 ```
 
-> **El monitor cachea el directorio**: tras inyectar, los archivos nuevos no
-> aparecen en `LS` hasta que se re-monta la SD (comando `SD` del monitor, o
-> `Re-montar SD` en el menú de la ventana). El archivo **sí** está escrito y en
-> `/sdcard/ls` aparece siempre.
+> **El monitor cachea el directorio**: tras inyectar por HTTP, los archivos
+> nuevos no aparecen en `LS` hasta que se re-monta la SD. Manda `sd` + Enter
+> por el UART (PuTTY o `curl` al `/uart`), o pulsa **`Remontar`** en el módulo
+> SD de la ventana. (La ventana **sí** re-monta sola cuando añades, borras o
+> renombras desde su GUI.) El archivo **sí** está escrito y en `/sdcard/ls`
+> aparece siempre.
 
 Leer el estado del sistema:
 
@@ -859,7 +862,9 @@ escala antes que cortarse.
 #### LEDs
 
 Puerto 2, activos en bajo (`1` en `leds()` = encendido). Se dibujan en el panel
-lateral, arriba, con forma de placa.
+lateral, arriba, con forma de placa y la etiqueta **`LEDS`** a su izquierda
+(fuera de la placa, en el margen del panel): son los 6 LEDs del Tang Nano 9K,
+en el mismo orden que en la FPGA.
 
 El **SID player** los usa como VU meter: lee las envolventes del SID en `$D41D`
 (voz 1), `$D41E` (voz 2), `$D41C` (voz 3) y `$D41F` (máximo de las tres) y
@@ -873,29 +878,39 @@ SID ($D400-$D41F):
   envolventes: ENV1=114 ENV2=181 ENV3=  0 MAX=181  ($D41D/$D41E/$D41C/$D41F)
 ```
 
-#### Menú SD (gestión de archivos en caliente)
+#### Módulo SD (gestión de archivos en caliente)
 
-Arriba del panel hay una **franja de menú** con un único botón `SD`:
+El panel tiene un **módulo SD** fijo, entre el puerto 1 y la consola, con el
+listado de la tarjeta y sus acciones. Todo es **clicable con el ratón**:
 
 ```
-[ SD ]
- ├─ Añadir archivo...    (diálogo nativo de Windows)
- ├─ Borrar archivo...
- ├─ Re-montar SD
- └─ <listado de archivos>
+  SD                                    [Remontar] [+ Añadir]
+  JUEGO.BIN      14043                      [REN] [DEL]
+  TETRIS.BIN     13626                      [REN] [DEL]
+  ...
 ```
 
-- **Añadir archivo...**: abre el selector de archivos del sistema; el elegido
-  se escribe en la imagen SD **sin reiniciar** el emulador.
-- **Borrar archivo...**: borra el archivo seleccionado del listado.
-- **Re-montar SD**: manda `sd` al monitor para que **relea el directorio**.
-  Hace falta porque el firmware cachea el listado al montar.
-- **Un clic en `SD`** despliega el menú y **pide el listado actualizado** de la
-  tarjeta; otro clic lo cierra.
-- Clic fuera del menú (en el panel) o elegir una acción también lo cierra.
+- **`+ Añadir`**: abre el selector de archivos de Windows; el elegido se escribe
+  en la imagen SD **sin reiniciar** el emulador, con su nombre de archivo.
+- **`REN`**: renombra esa fila. Abre un cuadro con el nombre **seleccionado**
+  (teclear lo reemplaza); **Enter** o **`Aceptar`** confirman, **Esc** o
+  **`Cancelar`** lo dejan como estaba.
+- **`DEL`**: primer clic, el botón se pone en rojo como **`SEG`** pidiendo
+  confirmación; el segundo borra. Un clic en otro sitio cancela.
+- **`Remontar`**: manda `sd` al monitor para que **relea el directorio**.
 
-Todo es **clicable con el ratón**. La franja ocupa 24 px y la ventana crece
-otros 24 para que la consola conserve sus 24 filas.
+> **El monitor cachea el listado.** Los cambios en la imagen son inmediatos,
+> pero el firmware 6502 sigue viendo la lista vieja hasta que se re-monta. La
+> ventana lo hace **automáticamente** tras cada añadir, borrar y renombrar; el
+> botón `Remontar` queda por si la tarjeta se toca por fuera (herramientas,
+> `sd_tool.py`, otro emulador o la propia CPU).
+
+El módulo tiene **alto variable**: con la tarjeta vacía ocupa una fila de aviso
+y crece hasta mostrar **16 archivos** (el máximo de la MicroFS). La ventana
+crece o encoge con él para que la consola de 24 filas no se recorte nunca.
+
+Equivalente por HTTP (ver [Herramientas de SD](#7-herramientas-de-sd)):
+`/sdcard/ls`, `/sdcard/write`, `/sdcard/delete`, `/sdcard/rename`.
 
 #### Terminal del UART en la ventana
 

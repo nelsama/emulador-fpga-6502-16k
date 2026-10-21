@@ -48,6 +48,9 @@ public:
   bool agregar_archivo(const std::string& nombre, const std::vector<uint8_t>& datos,
                        std::string* error = nullptr);
   bool borrar_archivo(const std::string& nombre, std::string* error = nullptr);
+  // Cambia el nombre de un archivo (no mueve sus sectores).
+  bool renombrar_archivo(const std::string& viejo, const std::string& nuevo,
+                         std::string* error = nullptr);
   std::vector<Entrada> listar_archivos() const;
   // Espacio libre en bytes (desde el sector libre hasta el final).
   uint32_t espacio_libre() const;

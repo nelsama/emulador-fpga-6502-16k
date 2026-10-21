@@ -468,6 +468,33 @@ void DebugServer::build_response(Conn& /*c*/, const std::string& head) {
       }
     }
 
+  } else if (path == "/sdcard/rename") {
+    // /sdcard/rename?name=VIEJO.BIN&to=NUEVO.BIN
+    if (!sd_ || !sd_->montada()) {
+      resp_.status = "503 Service Unavailable";
+      resp_.body = "sin tarjeta SD" + NL;
+    } else {
+      std::string viejo, nuevo;
+      const size_t pn = query.find("name=");
+      if (pn != std::string::npos) {
+        viejo = query.substr(pn + 5);
+        const size_t amp = viejo.find('&');
+        if (amp != std::string::npos) viejo = viejo.substr(0, amp);
+      }
+      const size_t pt = query.find("to=");
+      if (pt != std::string::npos) nuevo = query.substr(pt + 3);
+      std::string err;
+      if (viejo.empty() || nuevo.empty()) {
+        resp_.status = "400 Bad Request";
+        resp_.body = "uso: /sdcard/rename?name=VIEJO.BIN&to=NUEVO.BIN" + NL;
+      } else if (sd_->renombrar_archivo(viejo, nuevo, &err)) {
+        resp_.body = "OK: " + viejo + " -> " + nuevo + NL;
+      } else {
+        resp_.status = "404 Not Found";
+        resp_.body = "ERROR: " + err + NL;
+      }
+    }
+
   } else if (path == "/sdcard/delete") {
     if (!sd_ || !sd_->montada()) {
       resp_.status = "503 Service Unavailable";

@@ -113,7 +113,7 @@ public:
     std::string nombre;
     uint32_t bytes = 0;
   };
-  void set_listado_sd(std::vector<ArchivoSd> lista) { listado_sd_ = std::move(lista); }
+  void set_listado_sd(std::vector<ArchivoSd> lista);
 
 private:
   // Celda del terminal: la fuente 8x8 del Core de Vídeo escalada TERM_SCALE.
@@ -130,8 +130,11 @@ private:
   // Dibuja la rejilla del terminal dentro de un rectángulo.
   void dibujar_terminal(void* renderer, const void* caja);
 
-  // Barra de menú SD y su desplegable. Rellena `zonas_` con lo clicable.
-  void dibujar_menu(void* renderer, int alto_panel);
+  // Módulo SD (lista de archivos con acciones). Rellena `zonas_`.
+  // Devuelve el alto ocupado.
+  int dibujar_modulo_sd(void* renderer, int x, int y);
+  // Diálogo de entrada de texto (encima del panel).
+  void dibujar_dialogo(void* renderer);
 
   // Dibuja placa + LEDs + puerto 1 en su textura de caché (solo si cambió el
   // estado). Devuelve la textura lista para copiar en (x, y).
@@ -139,6 +142,10 @@ private:
 
   // Alt+Intro recorre los modos de vista (equivale a F11).
   void poll_alt_enter();
+
+  // Redimensiona la ventana para que el panel quepa entero (el módulo SD crece
+  // con el número de archivos y la consola siempre debe verse a 80x24).
+  void ajustar_alto_ventana();
 
   // Rectángulos de los botones del margen del vídeo (pestaña para cambiar de
   // modo). Se calculan en cada fotograma junto con el rectángulo del vídeo.
@@ -161,22 +168,41 @@ private:
   bool term_sucio_ = true;         // hay que regenerar term_px_
 
   // Cache del panel de estado (placa + LEDs + puerto 1) en una textura: solo
-  // se redibuja cuando cambian los LEDs o los pines, no en cada fotograma.
+  // se redibuja cuando cambian los LEDs, los pines o los colores con que se
+  // pinta según el modo de cada bit.
   void* panel_tex_ = nullptr;
   int panel_tex_w_ = 0, panel_tex_h_ = 0;
   uint8_t cache_leds_ = 0xFF;
   uint8_t cache_p1v_ = 0xFF;
   uint8_t cache_p1d_ = 0xFF;
+  bool cache_modo_ = false;     // hubo algún bit como entrada (colores distintos)
   bool cache_valida_ = false;
 
-  // Menú SD (barra fija arriba del panel).
-  static constexpr int MENU_H = 24;
-  enum class MenuEstado { Cerrado, Abierto };
-  MenuEstado menu_ = MenuEstado::Cerrado;
+  // Módulo SD del panel (lista de archivos con acciones).
+  //
+  // Diálogo de entrada de texto propio (SDL no trae uno): lo usan renombrar y
+  // "añadir con nombre". Mientras está activo, el teclado va al campo.
+  struct Dialogo {
+    bool activo = false;
+    bool seleccionado = false;  // el texto inicial se sustituye al teclear
+    std::string titulo;
+    std::string texto;
+    std::string accion;   // qué hay que hacer al aceptar
+    std::string arg;      // contexto (p. ej. el nombre viejo)
+  };
+  Dialogo dialogo_;
+
+  // Geometría del módulo SD.
+  static constexpr int FILA_SD = 18;    // alto de cada fila de archivo
+  static constexpr int BOTON_SD = 34;   // ancho de los botones REN/DEL
   std::vector<ArchivoSd> listado_sd_;
   // Zonas clicables del menú, en coordenadas del renderer.
   struct Zona { int x, y, w, h; std::string accion; std::string arg; };
   std::vector<Zona> zonas_;
+  int fila_resaltada_ = -1;   // archivo bajo el ratón
+  int fila_borrar_ = -1;      // archivo pendiente de confirmar borrado
+  int alto_modulo_sd_ = 0;    // alto actual del módulo (para la ventana)
+  int alto_ventana_previo_ = 0;  // último alto pedido en ajustar_alto_ventana()
   int w_ = 320;
   int h_ = 240;
   int scale_ = 3;

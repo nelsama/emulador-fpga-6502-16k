@@ -173,6 +173,8 @@ debería cerrar con `shutdown(SHUT_WR)`.
 | `/console.png` | Captura de la consola con colores (640×384), `?scale=2..4` |
 | `/sdcard/ls` | Archivos de la SD y espacio libre |
 | `POST /sdcard/write?name=X.BIN` | Añade un archivo en caliente (cuerpo = datos) |
+| `/sdcard/delete?name=X.BIN` | Borra un archivo de la imagen |
+| `/sdcard/rename?name=X.BIN&to=Y.BIN` | Renombra un archivo (conserva los datos) |
 | `/screen.png` | Captura del vídeo del FPGA (320×240), `?scale=2..4` |
 | `/vram.txt` | Tilemap, atributos y OAM en hexadecimal + vista ASCII 40×30 |
 | `/vram.json` | Lo mismo, estructurado |
@@ -189,11 +191,18 @@ curl http://localhost:8080/state.txt | head -40
 # Inyectar un binario sin reiniciar el emulador:
 curl --data-binary @JUEGO.BIN "http://localhost:8080/sdcard/write?name=JUEGO.BIN"
 curl "http://localhost:8080/sdcard/ls"
+curl "http://localhost:8080/sdcard/rename?name=JUEGO.BIN&to=JUEGO2.BIN"
+curl "http://localhost:8080/sdcard/delete?name=JUEGO2.BIN"
 ```
 
-Tras inyectar, el monitor sigue mostrando el directorio viejo hasta que se
-re-monta: manda `sd` por el UART (o pulsa `Re-montar SD` en el menú de la
-ventana).
+Tras inyectar por HTTP, el monitor sigue mostrando el directorio viejo hasta que
+se re-monta: manda `sd\r` por el UART (o pulsa `Remontar` en el módulo SD de la
+ventana). La GUI de la ventana re-monta sola cuando es ella la que añade, borra
+o renombra.
+
+> **El emulador debe ejecutarse FUERA de un sandbox**: abre ventana (SDL2) y
+> escucha en red (4000/8080). Dentro de un sandbox no funciona; lánzalo en el
+> shell normal del usuario.
 
 `/state.txt` incluye también el **flag de usuario** (`$C004 flag usuario: 0/1`),
 un bit R/W que sobrevive al reset del sistema y sirve para que el software
