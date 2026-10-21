@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -95,6 +96,25 @@ public:
   // Estado actual del joystick en el formato del puerto 1 (activo en bajo).
   uint8_t joy() const { return joy_; }
 
+  // --- Menú SD ---------------------------------------------------------
+  //
+  // La ventana no sabe gestionar archivos: cuando el usuario elige una acción
+  // del menú, se llama a este callback para que main.cpp la ejecute (donde
+  // están la tarjeta y la emulación). `accion` es:
+  //   "add"    añadir un archivo (se pide con el diálogo nativo)
+  //   "list"   mostrar el listado
+  //   "delete" borrar (nombre en `arg`)
+  //   "remount" re-montar la SD en el monitor (para que el firmware actualice
+  //            su caché del directorio)
+  std::function<void(const std::string& accion, const std::string& arg)> on_sd_accion;
+
+  // Listado a mostrar en el desplegable (lo rellena main.cpp).
+  struct ArchivoSd {
+    std::string nombre;
+    uint32_t bytes = 0;
+  };
+  void set_listado_sd(std::vector<ArchivoSd> lista) { listado_sd_ = std::move(lista); }
+
 private:
   // Celda del terminal: la fuente 8x8 del Core de Vídeo escalada TERM_SCALE.
   // Se deja a x1 (8x8 px, el tamaño nativo de la fuente): es lo que más se
@@ -109,6 +129,9 @@ private:
 
   // Dibuja la rejilla del terminal dentro de un rectángulo.
   void dibujar_terminal(void* renderer, const void* caja);
+
+  // Barra de menú SD y su desplegable. Rellena `zonas_` con lo clicable.
+  void dibujar_menu(void* renderer, int alto_panel);
 
   // Dibuja placa + LEDs + puerto 1 en su textura de caché (solo si cambió el
   // estado). Devuelve la textura lista para copiar en (x, y).
@@ -145,6 +168,15 @@ private:
   uint8_t cache_p1v_ = 0xFF;
   uint8_t cache_p1d_ = 0xFF;
   bool cache_valida_ = false;
+
+  // Menú SD (barra fija arriba del panel).
+  static constexpr int MENU_H = 24;
+  enum class MenuEstado { Cerrado, Abierto };
+  MenuEstado menu_ = MenuEstado::Cerrado;
+  std::vector<ArchivoSd> listado_sd_;
+  // Zonas clicables del menú, en coordenadas del renderer.
+  struct Zona { int x, y, w, h; std::string accion; std::string arg; };
+  std::vector<Zona> zonas_;
   int w_ = 320;
   int h_ = 240;
   int scale_ = 3;

@@ -191,6 +191,9 @@ pantalla sin intervención humana**.
 | `/screen.ppm` | PPM | La misma imagen sin comprimir (P6), para herramientas sin decodificador PNG |
 | `/console.txt` | texto | Pantalla de la **consola** (80×24), tal como la interpreta el terminal |
 | `/console.png` | PNG | Captura de la consola (640×384), con sus colores ANSI y glifos CP437 |
+| `/sdcard/ls` | texto | Archivos de la SD y espacio libre |
+| `POST /sdcard/write?name=X.BIN` | texto | Añade un archivo (cuerpo = datos binarios) |
+| `/sdcard/delete?name=X.BIN` | texto | Borra un archivo |
 | `/vram.txt` | texto | Tilemap, atributos y OAM en hexadecimal + vista ASCII 40×30 |
 | `/vram.json` | JSON | Lo mismo que `/vram.txt` pero estructurado, para procesarlo con código |
 | `/state.txt` | texto | CPU/UART, LEDs, Core de Vídeo y registros del SID |
@@ -221,6 +224,19 @@ curl -o consola.png "http://localhost:8080/console.png?scale=2"
 
 `/console.txt` es lo más útil para un agente: permite comprobar qué está
 mostrando un programa de terminal sin abrir la ventana ni interpretar imágenes.
+
+Añadir un archivo a la SD **con el emulador en marcha**:
+
+```bash
+curl --data-binary @JUEGO.BIN "http://localhost:8080/sdcard/write?name=JUEGO.BIN"
+curl "http://localhost:8080/sdcard/ls"
+curl "http://localhost:8080/sdcard/delete?name=JUEGO.BIN"
+```
+
+> **El monitor cachea el directorio**: tras inyectar, los archivos nuevos no
+> aparecen en `LS` hasta que se re-monta la SD (comando `SD` del monitor, o
+> `Re-montar SD` en el menú de la ventana). El archivo **sí** está escrito y en
+> `/sdcard/ls` aparece siempre.
 
 Leer el estado del sistema:
 
@@ -856,6 +872,29 @@ escribe la barra en `$C001`. Puedes verificar ambas cosas en `/state.txt`:
 SID ($D400-$D41F):
   envolventes: ENV1=114 ENV2=181 ENV3=  0 MAX=181  ($D41D/$D41E/$D41C/$D41F)
 ```
+
+#### Menú SD (gestión de archivos en caliente)
+
+Arriba del panel hay una **franja de menú** con `SD` y `Ver`:
+
+```
+[ SD ] [ Ver ]
+ ├─ Añadir archivo...    (diálogo nativo de Windows)
+ ├─ Borrar archivo...
+ ├─ Re-montar SD
+ └─ <listado de archivos>
+```
+
+- **Añadir archivo...**: abre el selector de archivos del sistema; el elegido
+  se escribe en la imagen SD **sin reiniciar** el emulador.
+- **Borrar archivo...**: borra el archivo seleccionado del listado.
+- **Re-montar SD**: manda `sd` al monitor para que **relea el directorio**.
+  Hace falta porque el firmware cachea el listado al montar.
+- **Ver**: despliega el menú y pide el listado actualizado.
+- Clic fuera del menú (en el panel) o elegir una acción lo cierra.
+
+Todo es **clicable con el ratón**. La franja ocupa 24 px y la ventana crece
+otros 24 para que la consola conserve sus 24 filas.
 
 #### Terminal del UART en la ventana
 

@@ -39,6 +39,9 @@ public:
   int port() const { return port_; }
   bool active() const { return listen_ != kInvalid || listen6_ != kInvalid; }
 
+  // Tarjeta SD para los endpoints /sdcard/*. nullptr = sin tarjeta montada.
+  void set_sdcard(class SdCardImpl* sd) { sd_ = sd; }
+
 private:
   struct Conn;
   struct Response {
@@ -58,6 +61,9 @@ private:
   long long listen6_ = kInvalid; // socket de escucha IPv6 (::1)
   int port_ = 0;
   Bus* bus_ = nullptr;
+  class SdCardImpl* sd_ = nullptr;
+  // Cuerpo de la petición en curso (POST). Vacío en GET.
+  std::string cuerpo_peticion_;
   Response resp_;
   std::vector<std::unique_ptr<Conn>> conns_;
 };

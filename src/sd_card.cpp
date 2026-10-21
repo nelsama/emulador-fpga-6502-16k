@@ -158,6 +158,144 @@ bool SdCardImpl::mount() {
 }
 
 // ---------------------------------------------------------------------------
+//  Gestión de archivos en caliente (MicroFS)
+// ---------------------------------------------------------------------------
+//  Mismo formato que tools/sd_tool.py: 16 entradas de 32 bytes en el sector 0
+//  (nombre 8.3 terminado en NUL, sector inicial, tamaño y sectores ocupados),
+//  y el "proximo sector libre" en los bytes 6-7.
+
+namespace {
+
+constexpr int kEntradaBytes = 32;
+constexpr int kTablaOffset = 16;
+
+// Normaliza a 8.3 en mayúsculas, como el monitor. Devuelve "" si no vale.
+std::string normalizar_nombre(const std::string& in) {
+  std::string base = in, ext;
+  const size_t punto = in.find_last_of('.');
+  if (punto != std::string::npos) {
+    base = in.substr(0, punto);
+    ext = in.substr(punto + 1);
+  }
+  if (base.empty() || base.size() > 8 || ext.size() > 3) return "";
+  std::string out;
+  for (char c : base) {
+    if (!(c >= ' ' && c < 127) || c == '.' || c == '\\' || c == '/') return "";
+    out.push_back((char)((c >= 'a' && c <= 'z') ? c - 32 : c));
+  }
+  if (!ext.empty()) {
+    out.push_back('.');
+    for (char c : ext) {
+      if (!(c >= ' ' && c < 127) || c == '.' || c == '\\' || c == '/') return "";
+      out.push_back((char)((c >= 'a' && c <= 'z') ? c - 32 : c));
+    }
+  }
+  return out;
+}
+
+}  // namespace
+
+uint32_t SdCardImpl::espacio_libre() const {
+  if (!mounted_ || img_.size() < 512) return 0;
+  const uint32_t libre = get16(img_.data() + 6);
+  if (libre >= sectors_) return 0;
+  return (sectors_ - libre) * 512;
+}
+
+std::vector<SdCardImpl::Entrada> SdCardImpl::listar_archivos() const {
+  std::vector<Entrada> out;
+  if (!mounted_ || img_.size() < 512) return out;
+  for (int i = 0; i < MAX_ENTRADAS; i++) {
+    const uint8_t* e = img_.data() + kTablaOffset + i * kEntradaBytes;
+    if (e[0] == 0) continue;
+    Entrada ent;
+    char nombre[13] = {0};
+    std::memcpy(nombre, e, 12);
+    ent.nombre = nombre;
+    ent.sector = get16(e + 12);
+    ent.bytes = get16(e + 14);
+    ent.sectores = get16(e + 16);
+    out.push_back(ent);
+  }
+  return out;
+}
+
+bool SdCardImpl::agregar_archivo(const std::string& nombre_in,
+                                 const std::vector<uint8_t>& datos,
+                                 std::string* error) {
+  auto fallo = [&](const char* msg) {
+    if (error) *error = msg;
+    return false;
+  };
+  if (!mounted_ || img_.size() < 1024) return fallo("no hay tarjeta montada");
+
+  const std::string nombre = normalizar_nombre(nombre_in);
+  if (nombre.empty()) return fallo("nombre no valido (formato 8.3)");
+
+  // Si ya existe, se borra antes (como hace SAVE del monitor).
+  borrar_archivo(nombre, nullptr);
+
+  // Slot libre en la tabla.
+  int slot = -1;
+  for (int i = 0; i < MAX_ENTRADAS; i++) {
+    if (img_[kTablaOffset + i * kEntradaBytes] == 0) {
+      slot = i;
+      break;
+    }
+  }
+  if (slot < 0) return fallo("tabla llena (16 archivos)");
+
+  const uint32_t sectores =
+      datos.empty() ? 1 : (uint32_t)((datos.size() + 511) / 512);
+  const uint32_t inicio = get16(img_.data() + 6);
+  if (inicio + sectores > sectors_) return fallo("no cabe en la imagen");
+
+  // Datos.
+  const size_t off = (size_t)inicio * 512;
+  std::memcpy(img_.data() + off, datos.data(), datos.size());
+  const size_t fin = off + (size_t)sectores * 512;
+  std::memset(img_.data() + off + datos.size(), 0, fin - off - datos.size());
+
+  // Entrada de la tabla.
+  uint8_t* e = img_.data() + kTablaOffset + slot * kEntradaBytes;
+  std::memset(e, 0, kEntradaBytes);
+  std::memcpy(e, nombre.data(), nombre.size());
+  put16(e + 12, (uint16_t)inicio);
+  put16(e + 14, (uint16_t)datos.size());
+  put16(e + 16, (uint16_t)sectores);
+
+  // Nuevo sector libre.
+  put16(img_.data() + 6, (uint16_t)(inicio + sectores));
+
+  // Persistencia: tabla y datos.
+  for (uint32_t s = inicio; s < inicio + sectores; s++) flush_sector(s);
+  flush_sector(0);
+  return true;
+}
+
+bool SdCardImpl::borrar_archivo(const std::string& nombre_in, std::string* error) {
+  auto fallo = [&](const char* msg) {
+    if (error) *error = msg;
+    return false;
+  };
+  if (!mounted_ || img_.size() < 1024) return fallo("no hay tarjeta montada");
+  const std::string nombre = normalizar_nombre(nombre_in);
+  if (nombre.empty()) return fallo("nombre no valido");
+
+  for (int i = 0; i < MAX_ENTRADAS; i++) {
+    uint8_t* e = img_.data() + kTablaOffset + i * kEntradaBytes;
+    if (e[0] == 0) continue;
+    char actual[13] = {0};
+    std::memcpy(actual, e, 12);
+    if (nombre != actual) continue;
+    std::memset(e, 0, kEntradaBytes);
+    flush_sector(0);
+    return true;
+  }
+  return fallo("no existe");
+}
+
+// ---------------------------------------------------------------------------
 //  Protocolo SPI
 // ---------------------------------------------------------------------------
 

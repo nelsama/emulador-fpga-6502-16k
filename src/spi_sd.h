@@ -37,6 +37,14 @@ public:
   // Conectar una tarjeta SD emulada (puede ser nullptr para "sin tarjeta").
   void attach(SdCard* sd) { sd_ = sd; }
 
+  // Tarjeta conectada (para el servidor de depuración y la ventana).
+  SdCard* card() const { return sd_; }
+
+  // ¿La CPU está usando el bus SPI ahora mismo? Si es así, escribir en la
+  // tarjeta desde fuera (inyectar un archivo) podría pisar una transferencia
+  // en curso: el que escribe fuera espera a que baje.
+  bool ocupada() const { return sd_selected(); }
+
   // ¿Está CS0 (SD) activo?
   bool sd_selected() const { return cs_enable_ && (ss_mask_ & 0x01); }
 

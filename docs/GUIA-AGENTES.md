@@ -171,6 +171,8 @@ debería cerrar con `shutdown(SHUT_WR)`.
 |---|---|
 | `/console.txt` | **Lo más útil** para programas de texto: la pantalla de 80×24 en texto plano |
 | `/console.png` | Captura de la consola con colores (640×384), `?scale=2..4` |
+| `/sdcard/ls` | Archivos de la SD y espacio libre |
+| `POST /sdcard/write?name=X.BIN` | Añade un archivo en caliente (cuerpo = datos) |
 | `/screen.png` | Captura del vídeo del FPGA (320×240), `?scale=2..4` |
 | `/vram.txt` | Tilemap, atributos y OAM en hexadecimal + vista ASCII 40×30 |
 | `/vram.json` | Lo mismo, estructurado |
@@ -183,7 +185,15 @@ debería cerrar con `shutdown(SHUT_WR)`.
 curl http://localhost:8080/console.txt
 curl -o ojo.png "http://localhost:8080/screen.png?scale=2"
 curl http://localhost:8080/state.txt | head -40
+
+# Inyectar un binario sin reiniciar el emulador:
+curl --data-binary @JUEGO.BIN "http://localhost:8080/sdcard/write?name=JUEGO.BIN"
+curl "http://localhost:8080/sdcard/ls"
 ```
+
+Tras inyectar, el monitor sigue mostrando el directorio viejo hasta que se
+re-monta: manda `sd` por el UART (o pulsa `Re-montar SD` en el menú de la
+ventana).
 
 `/state.txt` incluye también el **flag de usuario** (`$C004 flag usuario: 0/1`),
 un bit R/W que sobrevive al reset del sistema y sirve para que el software

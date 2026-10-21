@@ -28,6 +28,31 @@ public:
   // Escribe un único sector en disco (persistencia incremental).
   void flush_sector(uint32_t sector);
 
+  // --- Gestión de archivos en caliente (MicroFS) -------------------------
+  //
+  // Permiten añadir, listar y borrar archivos de la imagen sin reiniciar el
+  // emulador. La tabla está en el sector 0 y se relee en cada comando del
+  // monitor, así que el cambio es visible de inmediato.
+  //
+  // Todos devuelven false si no hay tarjeta montada, y `agregar` si el nombre
+  // no es válido, la tabla está llena o no cabe en la imagen.
+  struct Entrada {
+    std::string nombre;
+    uint32_t sector = 0;
+    uint32_t bytes = 0;
+    uint32_t sectores = 0;
+  };
+
+  static constexpr int MAX_ENTRADAS = 16;
+
+  bool agregar_archivo(const std::string& nombre, const std::vector<uint8_t>& datos,
+                       std::string* error = nullptr);
+  bool borrar_archivo(const std::string& nombre, std::string* error = nullptr);
+  std::vector<Entrada> listar_archivos() const;
+  // Espacio libre en bytes (desde el sector libre hasta el final).
+  uint32_t espacio_libre() const;
+  bool montada() const { return mounted_; }
+
   // Interfaz SPI: recibe MOSI y devuelve MISO.
   uint8_t transfer(uint8_t mosi) override;
 

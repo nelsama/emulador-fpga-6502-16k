@@ -9,8 +9,16 @@
 
 #include "bus.h"
 #include "debug_dump.h"
+#include "sd_card.h"
+#include "spi_sd.h"
 #include "uart.h"
 #include "video/video.h"
+
+#include <string>
+
+// Salto de linea para los mensajes de texto. Se usa una constante en vez de
+// escribir la secuencia de escape en cada literal.
+static const std::string NL = "\n";
 
 #ifdef _WIN32
   #include <winsock2.h>
@@ -263,6 +271,24 @@ bool DebugServer::step(Conn& c) {
         return c.in.size() <= 65536; // esperar el resto de la cabecera
       }
 
+      // POST: hay que esperar a que llegue el cuerpo entero (Content-Length).
+      // Lo usa /sdcard/write para inyectar binarios.
+      {
+        const std::string cab = c.in.substr(0, end);
+        if (cab.compare(0, 5, "POST ") == 0) {
+          size_t len = 0;
+          const size_t p = cab.find("Content-Length:");
+          if (p != std::string::npos) {
+            len = (size_t)std::strtoul(cab.c_str() + p + 15, nullptr, 10);
+          }
+          const size_t completo = end + 4 + len;
+          if (c.in.size() < completo) {
+            return c.in.size() <= (16u * 1024u * 1024u);  // tope: 16 MB
+          }
+          cuerpo_peticion_.assign(c.in, end + 4, len);
+        }
+      }
+
       build_response(c, c.in.substr(0, end));
       std::string full = "HTTP/1.1 " + resp_.status + "\r\nContent-Type: " + resp_.type +
                          "\r\nContent-Length: " + std::to_string(resp_.body.size()) +
@@ -393,6 +419,77 @@ void DebugServer::build_response(Conn& /*c*/, const std::string& head) {
     v->render(fb.data());
     resp_.type = "image/x-portable-pixmap";
     debug_dump::screenshot_ppm_mem(fb.data(), Video::W, Video::H, resp_.body);
+
+  } else if (path == "/sdcard/ls") {
+    // Listado de la tarjeta, en texto (una linea por archivo).
+    if (!sd_ || !sd_->montada()) {
+      resp_.status = "503 Service Unavailable";
+      resp_.body = "sin tarjeta SD" + NL;
+    } else {
+      resp_.type = "text/plain";
+      resp_.body = "libre: " + std::to_string(sd_->espacio_libre()) + " bytes" + NL;
+      for (const auto& e : sd_->listar_archivos()) {
+        resp_.body += e.nombre + "  " + std::to_string(e.bytes) + " bytes  sector " +
+                      std::to_string(e.sector) + NL;
+      }
+    }
+
+  } else if (path == "/sdcard/write") {
+    // POST /sdcard/write?name=JUEGO.BIN  (cuerpo = bytes del archivo)
+    //
+    // Se espera a que la CPU no este usando el SPI para no pisar una
+    // transferencia en curso.
+    if (!sd_ || !sd_->montada()) {
+      resp_.status = "503 Service Unavailable";
+      resp_.body = "sin tarjeta SD" + NL;
+    } else if (bus_->spi() && bus_->spi()->ocupada()) {
+      resp_.status = "409 Conflict";
+      resp_.body = "la SD esta ocupada por la CPU; reintenta" + NL;
+    } else {
+      std::string nombre;
+      const size_t pn = query.find("name=");
+      if (pn != std::string::npos) {
+        nombre = query.substr(pn + 5);
+        const size_t amp = nombre.find('&');
+        if (amp != std::string::npos) nombre = nombre.substr(0, amp);
+      }
+      std::string err;
+      const std::vector<uint8_t> datos(cuerpo_peticion_.begin(), cuerpo_peticion_.end());
+      if (nombre.empty()) {
+        resp_.status = "400 Bad Request";
+        resp_.body = "uso: POST /sdcard/write?name=NOMBRE.BIN (cuerpo = datos)" + NL;
+      } else if (sd_->agregar_archivo(nombre, datos, &err)) {
+        resp_.body = "OK: " + nombre + " (" + std::to_string(datos.size()) + " bytes)" + NL;
+        std::printf("SD: %s inyectado en caliente (%zu bytes)\n", nombre.c_str(),
+                    datos.size());
+      } else {
+        resp_.status = "409 Conflict";
+        resp_.body = "ERROR: " + err + NL;
+      }
+    }
+
+  } else if (path == "/sdcard/delete") {
+    if (!sd_ || !sd_->montada()) {
+      resp_.status = "503 Service Unavailable";
+      resp_.body = "sin tarjeta SD" + NL;
+    } else if (bus_->spi() && bus_->spi()->ocupada()) {
+      resp_.status = "409 Conflict";
+      resp_.body = "la SD esta ocupada por la CPU; reintenta" + NL;
+    } else {
+      std::string nombre;
+      const size_t pn = query.find("name=");
+      if (pn != std::string::npos) nombre = query.substr(pn + 5);
+      std::string err;
+      if (nombre.empty()) {
+        resp_.status = "400 Bad Request";
+        resp_.body = "uso: /sdcard/delete?name=NOMBRE.BIN" + NL;
+      } else if (sd_->borrar_archivo(nombre, &err)) {
+        resp_.body = "OK: " + nombre + " eliminado" + NL;
+      } else {
+        resp_.status = "404 Not Found";
+        resp_.body = "ERROR: " + err + NL;
+      }
+    }
 
   } else if (path == "/console.txt") {
     // Pantalla de la consola (80x24) tal como la interpreta el terminal del

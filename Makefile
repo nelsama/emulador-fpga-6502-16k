@@ -8,7 +8,7 @@
 CXX       := g++
 CXXFLAGS  := -std=c++17 -O2 -Wall -MMD -MP -Isrc \
              -Ithird_party/residfp -Ithird_party/residfp/resample
-LDFLAGS   := -lws2_32 -lwinmm
+LDFLAGS   := -lws2_32 -lwinmm -lcomdlg32
 
 # SDL2 es opcional: si está instalado se habilita el audio (y más adelante el
 # vídeo). MSYS2 UCRT64 lo instala en C:/msys64/ucrt64, pero desde un shell

@@ -217,7 +217,9 @@ bool EmuWindow::start(int video_w, int video_h, int scale, bool terminal) {
 
   // Alto: el necesario para que quepan el panel y sus 24 filas de consola.
   // Sin esto, la rejilla se corta por abajo cuando el vídeo es bajo.
-  const int panel_alto = 12 + 46 + 6 + (30 + 12 + 8 * FILA_P1 + 4) + 6 +
+  // El menú es una franja fija encima del panel; la ventana crece lo suyo para
+  // que nadie pierda la consola de 24 filas.
+  const int panel_alto = MENU_H + 12 + 46 + 6 + (30 + 12 + 8 * FILA_P1 + 4) + 6 +
                          TerminalState::ROWS * TERM_CH + 2 * TERM_PAD + 12;
   if (alto_ventana < panel_alto) alto_ventana = panel_alto;
 
@@ -386,8 +388,36 @@ void EmuWindow::dibujar_boton_vista(void* renderer, int x, int y, int w, int h,
 #endif
 }
 
-// Gestiona un clic en coordenadas de ventana.
+// Gestiona un clic en coordenadas del renderer.
 void EmuWindow::clic_en(int x, int y) {
+  // 1) Menú SD: las zonas se generan al dibujar (de la última vuelta).
+  if (panel_visible()) {
+    for (const Zona& z : zonas_) {
+      if (x < z.x || x >= z.x + z.w || y < z.y || y >= z.y + z.h) continue;
+      if (z.accion == "menu_toggle") {
+        menu_ = (menu_ == MenuEstado::Abierto) ? MenuEstado::Cerrado
+                                               : MenuEstado::Abierto;
+      } else if (z.accion == "menu_ver") {
+        // "Ver": abre el menú y pide el listado actualizado.
+        menu_ = MenuEstado::Abierto;
+        if (on_sd_accion) on_sd_accion("list", "");
+      } else if (z.accion == "delete_archivo") {
+        if (on_sd_accion) on_sd_accion("delete", z.arg);
+        menu_ = MenuEstado::Cerrado;
+      } else {
+        if (on_sd_accion) on_sd_accion(z.accion, z.arg);
+        menu_ = MenuEstado::Cerrado;
+      }
+      return;
+    }
+    // Clic dentro del panel, fuera del menú: se cierra el desplegable.
+    if (menu_ == MenuEstado::Abierto && x < panel_w_) {
+      menu_ = MenuEstado::Cerrado;
+      return;
+    }
+  }
+
+  // 2) Botón de cambio de vista.
   if (x >= boton_x_ && x < boton_x_ + boton_w_ && y >= boton_y_ &&
       y < boton_y_ + boton_h_) {
     siguiente_vista();
@@ -607,6 +637,94 @@ void* EmuWindow::panel_cache(int x, int y, uint8_t leds) {
 #endif
 }
 
+// Barra de menú SD, arriba del panel.
+//
+// Franja fija de MENU_H px con dos "botones" (SD y Ver) y, al pulsar SD, un
+// desplegable debajo. Todo es clicable con el ratón: cada elemento se apunta
+// en `zonas_` y `clic_en()` comprueba esas zonas además del botón de vista.
+void EmuWindow::dibujar_menu(void* renderer, int /*alto_panel*/) {
+#ifdef HAVE_SDL2
+  SDL_Renderer* ren = static_cast<SDL_Renderer*>(renderer);
+  zonas_.clear();
+
+  // Fondo de la barra.
+  SDL_Rect barra{0, 0, panel_w_, MENU_H};
+  SDL_SetRenderDrawColor(ren, 44, 48, 56, 255);
+  SDL_RenderFillRect(ren, &barra);
+  SDL_SetRenderDrawColor(ren, 62, 68, 78, 255);
+  SDL_RenderDrawLine(ren, 0, MENU_H - 1, panel_w_, MENU_H - 1);
+
+  auto texto = [&](int x, int y, const char* t, SDL_Color c) {
+    SDL_SetRenderDrawColor(ren, c.r, c.g, c.b, 255);
+    for (int i = 0; t[i]; i++) draw_glyph(ren, x + i * TERM_CW, y, t[i], TERM_SCALE);
+  };
+
+  auto boton = [&](int x, const char* etiqueta, bool activo,
+                   const std::string& accion) {
+    const int w = (int)std::strlen(etiqueta) * TERM_CW + 16;
+    SDL_Rect r{x, 2, w, MENU_H - 5};
+    if (activo) {
+      SDL_SetRenderDrawColor(ren, 70, 78, 92, 255);
+      SDL_RenderFillRect(ren, &r);
+    }
+    texto(x + 8, 4, etiqueta, {220, 228, 240, 255});
+    zonas_.push_back(Zona{x, 2, w, MENU_H - 5, accion, ""});
+    return x + w;
+  };
+
+  int x = 6;
+  x = boton(x, "SD", menu_ == MenuEstado::Abierto, "menu_toggle");
+  x += 4;
+  boton(x, "Ver", false, "menu_ver");
+
+  if (menu_ == MenuEstado::Abierto) {
+    // Desplegable debajo de la barra, con las acciones y el listado.
+    struct Opcion { const char* etiqueta; const char* accion; };
+    static const Opcion opciones[] = {
+        {"Anadir archivo...", "add"},
+        {"Borrar archivo...", "delete"},
+        {"Re-montar SD", "remount"},
+    };
+    const int n_op = 3;
+    const int n_lista = (int)listado_sd_.size();
+    const int filas = n_op + 1 + (n_lista > 0 ? n_lista : 1);
+    const int ancho = 300;
+    const int alto = filas * 18 + 12;
+    SDL_Rect caja{PANEL_MARGEN, MENU_H + 2, ancho, alto};
+    SDL_SetRenderDrawColor(ren, 34, 38, 46, 250);
+    SDL_RenderFillRect(ren, &caja);
+    SDL_SetRenderDrawColor(ren, 90, 100, 118, 255);
+    SDL_RenderDrawRect(ren, &caja);
+
+    int y = MENU_H + 8;
+    for (int i = 0; i < n_op; i++) {
+      texto(PANEL_MARGEN + 10, y, opciones[i].etiqueta, {215, 222, 235, 255});
+      zonas_.push_back(Zona{PANEL_MARGEN, y - 3, ancho, 18, opciones[i].accion, ""});
+      y += 18;
+    }
+    // Separador y listado de archivos.
+    SDL_SetRenderDrawColor(ren, 70, 78, 92, 255);
+    SDL_RenderDrawLine(ren, PANEL_MARGEN + 6, y + 2, PANEL_MARGEN + ancho - 6, y + 2);
+    y += 8;
+    if (n_lista == 0) {
+      texto(PANEL_MARGEN + 10, y, "(lista vacia: pulsa Re-montar)", {140, 150, 165, 255});
+    }
+    for (int i = 0; i < n_lista && i < 16; i++) {
+      const ArchivoSd& a = listado_sd_[(size_t)i];
+      // Nombre a la izquierda y tamaño a la derecha.
+      texto(PANEL_MARGEN + 10, y, a.nombre.c_str(), {200, 212, 228, 255});
+      char tam[24];
+      std::snprintf(tam, sizeof tam, "%u", a.bytes);
+      const int tw = (int)std::strlen(tam) * TERM_CW;
+      texto(caja.x + ancho - 12 - tw, y, tam, {140, 152, 170, 255});
+      zonas_.push_back(Zona{PANEL_MARGEN, y - 3, ancho, 18, "delete_archivo",
+                           a.nombre});
+      y += 18;
+    }
+  }
+#endif
+}
+
 void EmuWindow::poll_alt_enter() {
 #ifdef HAVE_SDL2
   // Se detecta por estado de modificadores en vez de por evento para que
@@ -717,7 +835,7 @@ void EmuWindow::present(const uint32_t* rgb, uint8_t leds) {
     // aparte, en su propia textura.
     const int alto_estado = 12 + 46 + 6 + (30 + 12 + 8 * FILA_P1 + 4) + 6;
     if (void* tex_panel = panel_cache(0, 0, leds)) {
-      SDL_Rect dst{0, 0, panel_w_, alto_estado};
+      SDL_Rect dst{0, MENU_H, panel_w_, alto_estado};
       SDL_RenderCopy(ren, static_cast<SDL_Texture*>(tex_panel), nullptr, &dst);
     }
 
@@ -726,7 +844,7 @@ void EmuWindow::present(const uint32_t* rgb, uint8_t leds) {
       const int term_x = PANEL_MARGEN;
       const int term_w = panel_w_ - 2 * PANEL_MARGEN;
       const int term_h = TerminalState::ROWS * TERM_CH + 2 * TERM_PAD;  // 80x24 fijo
-      const int term_y = alto_estado;
+      const int term_y = MENU_H + alto_estado;
       SDL_Rect term{term_x, term_y, term_w, term_h};
       SDL_SetRenderDrawColor(ren, 8, 10, 12, 255);
       SDL_RenderFillRect(ren, &term);
@@ -737,6 +855,9 @@ void EmuWindow::present(const uint32_t* rgb, uint8_t leds) {
     }
   }
 
+  // La barra de menú se pinta AL FINAL: el desplegable tiene que quedar por
+  // encima de la placa y de la consola, no debajo.
+  if (panel_w_ > 0 && panel_visible()) dibujar_menu(ren, area_h);
   SDL_RenderPresent(ren);
 #endif
 }
