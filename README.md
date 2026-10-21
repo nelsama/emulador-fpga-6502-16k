@@ -44,7 +44,7 @@ Y abre en el navegador **<http://localhost:8080>** para ver el vídeo en vivo.
 | Componente | Estado | Notas |
 |---|---|---|
 | CPU 6502 | ✅ | 151 opcodes, ciclos reales por instrucción |
-| RAM 16 KB + ROM 16 KB | ✅ | monitor v2.6.2, vectores mapeados |
+| RAM 16 KB + ROM 16 KB | ✅ | monitor v2.6.4, vectores mapeados |
 | UART | ✅ | fiel a `uart.vhd`, entrega a ritmo serial |
 | SD / SPI | ✅ | protocolo SD completo, formato MicroFS |
 | Timer / RTC | ✅ | contadores con latch, 6.75 MHz |
@@ -226,7 +226,7 @@ src/
 third_party/residfp/   núcleo SID de VICE (GPL v2+)
 tools/                 gen_font, gen_font_cp437, test_terminal, extract_rom,
                        sd_tool, diag_rx, crear_sd.sh, emu_agent.py
-rom/monitor.bin        ROM del monitor v2.6.2
+rom/monitor.bin        ROM del monitor v2.6.4
 sdcard/                contenido de la SD (la imagen se regenera con tools/crear_sd.sh)
 run.sh / run.bat             lanzadores (sin depuracion)
 run_debug.sh / run_debug.bat  lanzadores con depuracion HTTP
