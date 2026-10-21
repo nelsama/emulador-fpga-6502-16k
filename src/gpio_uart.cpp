@@ -1,7 +1,7 @@
 #include "gpio_uart.h"
 
 bool Gpio::decodes(uint16_t addr) const {
-  return addr >= 0xC000 && addr <= 0xC003;
+  return addr >= 0xC000 && addr <= 0xC004;
 }
 
 uint8_t Gpio::read(uint16_t addr, bool& resp) {
@@ -13,6 +13,9 @@ uint8_t Gpio::read(uint16_t addr, bool& resp) {
     case 0xC001: return port2_read();
     case 0xC002: return dir1_;
     case 0xC003: return dir2_;
+    // $C004: flag de usuario persistente. Solo el bit 0 existe; los demas
+    // se leen como 0 (Board.vhd: flags_in => "0000000" & flag_user).
+    case 0xC004: return (uint8_t)(flag_user_ ? 0x01 : 0x00);
     default: resp = false; return 0;
   }
 }
@@ -29,6 +32,8 @@ void Gpio::write(uint16_t addr, uint8_t data, bool& resp) {
       break;
     case 0xC002: dir1_ = data; break;
     case 0xC003: dir2_ = data; break;
+    // $C004: se escribe SOLO el bit 0; el resto se ignora.
+    case 0xC004: flag_user_ = (data & 0x01) != 0; break;
     default: resp = false; break;
   }
 }

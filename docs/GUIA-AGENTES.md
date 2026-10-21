@@ -185,6 +185,10 @@ curl -o ojo.png "http://localhost:8080/screen.png?scale=2"
 curl http://localhost:8080/state.txt | head -40
 ```
 
+`/state.txt` incluye también el **flag de usuario** (`$C004 flag usuario: 0/1`),
+un bit R/W que sobrevive al reset del sistema y sirve para que el software
+recuerde estado entre reinicios.
+
 `/state.txt` incluye la tabla de pines del puerto 1 (bit, pin del FPGA, señal,
 modo entrada/salida y nivel), que es lo que hace falta para depurar el joystick:
 si los bits 3-7 no están en `entrada`, el programa no llamó a `joy_init()`.

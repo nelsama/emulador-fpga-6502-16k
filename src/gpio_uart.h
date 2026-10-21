@@ -4,11 +4,18 @@
 
 #include "device.h"
 
-// Puertos GPIO ($C000-$C003), fieles al Board.vhd.
+// Puertos GPIO ($C000-$C004), fieles al Board.vhd.
 //   $C000 = Puerto 1 (datos, bidireccional)   -> joystick Atari (DB9)
 //   $C001 = Puerto 2 (datos, bidireccional)   -> 6 LEDs del Tang Nano 9K
 //   $C002 = Config Puerto 1 (0=salida, 1=entrada por bit)
 //   $C003 = Config Puerto 2 (0=salida, 1=entrada por bit)
+//   $C004 = Flag de usuario persistente (bit 0, R/W; resto de bits = 0)
+//
+// El flag de $C004 es un unico flip-flop en el FPGA que NO esta conectado al
+// reset del sistema: sobrevive a un reset por S1 y solo se pierde al recargar
+// el bitstream. El software lo usa para conservar un bit de estado entre
+// reinicios. Aqui se mantiene mientras viva el emulador; ver reset de la placa
+// mas abajo.
 //
 // Igual que en el VHDL (port_sync): un bit configurado como SALIDA devuelve el
 // valor escrito; uno configurado como ENTRADA devuelve lo que haya en el pin.
@@ -60,6 +67,12 @@ public:
   // Valor de los pines del puerto 1 (joystick) y del puerto 2 (LEDs).
   uint8_t port1_pins() const { return port1_; }
 
+  // Flag de usuario de $C004 bit 0 (R/W, persistente).
+  bool flag_usuario() const { return flag_user_; }
+  // Simula el reset por boton S1: NO toca el flag de usuario, igual que en el
+  // FPGA (ese flip-flop no esta en el dominio del reset del sistema).
+  void reset_placa() {}
+
   // Lo que devuelve la CPU al leer $C000/$C001: cada bit es el pin si está
   // configurado como entrada, o el registro de salida si es salida.
   uint8_t port1_read() const {
@@ -84,4 +97,5 @@ private:
   uint8_t port2_out_ = 0;    // registro de salida del puerto 2
   uint8_t dir1_  = 0;        // 1 = entrada
   uint8_t dir2_  = 0;
+  bool    flag_user_ = false; // $C004 bit0: sobrevive al reset del sistema
 };

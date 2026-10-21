@@ -289,6 +289,8 @@ bool dump_state_txt_mem(Bus& bus, std::string& out) {
     const uint8_t leds = g->leds();
     out += "GPIO:\n";
     appendf(out, "  dir1/dir2: %02X / %02X (1 = entrada)\n", g->dir1(), g->dir2());
+    // $C004 bit0: flag de usuario que sobrevive al reset por S1.
+    appendf(out, "  $C004 flag usuario: %d\n", g->flag_usuario() ? 1 : 0);
 
     // Puertos 1 y 2 completos, bit a bit. Refleja exactamente lo que lee la CPU
     // en $C000/$C001 (pines si el bit es entrada, registro si es salida), así

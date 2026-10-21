@@ -523,7 +523,7 @@ monitor los muestra en mayúsculas.
 | `$0000-$3FFF` | RAM 16 KB (stack en `$3E00-$3FFF`) |
 | `$8000-$BFFF` | ROM del monitor 16 KB |
 | `$FFFA-$FFFF` | Vectores NMI/RESET/IRQ (mapeados dentro de la ROM) |
-| `$C000-$C003` | GPIO: puerto 1 (joystick), puerto 2 (6 LEDs) y configs |
+| `$C000-$C004` | GPIO: puerto 1 (joystick), puerto 2 (6 LEDs), configs y flag de usuario |
 | `$C020-$C023` | UART: datos TX/RX, STATUS/CONTROL, baudrate |
 | `$C030-$C03F` | Timer / RTC: contadores con latch, timer programable |
 | `$C040-$C047` | SPI: datos, estado, CS para la SD |
@@ -581,6 +581,33 @@ El SID player usa `$D41D-$D41F` para mover los 6 LEDs.
 | `$C001` | puerto 2: 6 LEDs (bits 0-5, activo en bajo) |
 | `$C002` | configuración puerto 1 (1 = entrada) |
 | `$C003` | configuración puerto 2 (el monitor pone `0xC0`) |
+| `$C004` | **flag de usuario persistente** (bit 0, R/W) |
+
+**Flag de usuario (`$C004`, bit 0)**
+
+Un único bit de lectura/escritura que **sobrevive al reset del sistema**:
+
+- Escribir guarda **solo el bit 0**; los bits 1-7 se ignoran.
+- Leer devuelve el bit 0 en la posición 0 y **0 en el resto**.
+- No se borra con el reset por botón (`S1`) ni con `Q` del monitor: en el FPGA
+  es un flip-flop que no está en el dominio del reset.
+- **Solo se pierde al recargar el bitstream** (reiniciar el FPGA). En el
+  emulador, solo se pierde al cerrar el emulador.
+
+Pensado para software que necesita recordar un bit entre reinicios (por
+ejemplo, "arrancar en modo seguro" tras un fallo).
+
+```
+> w C004 01      ; poner el flag
+> rd C004
+$C004 = $01
+> w C004 FF      ; los bits altos no cuentan
+> rd C004
+$C004 = $01
+```
+
+Se emula en `Gpio` (`src/gpio_uart.cpp`) y aparece en `/state.txt` como
+`$C004 flag usuario: 0/1`.
 
 **Timer (`$C030-$C03F`)**
 

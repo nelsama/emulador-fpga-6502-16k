@@ -71,8 +71,12 @@ run: $(BIN)
 	./$(BIN) rom/monitor.bin 4000 tarjeta.img
 
 # Pruebas rápidas (no necesitan SDL ni abrir ventana).
-test: test_terminal.exe
+test: test_terminal.exe test_gpio_flag.exe
 	./test_terminal.exe
+	./test_gpio_flag.exe
+
+test_gpio_flag.exe: tools/test_gpio_flag.cpp src/gpio_uart.cpp src/gpio_uart.h src/device.h
+	$(CXX) -std=c++17 -O2 -Wall -Isrc -o $@ tools/test_gpio_flag.cpp src/gpio_uart.cpp
 
 test_terminal.exe: tools/test_terminal.cpp src/terminal/terminal_state.cpp src/terminal/terminal_state.h src/terminal/font_cp437.h
 	$(CXX) -std=c++17 -O2 -Wall -Isrc -o $@ tools/test_terminal.cpp src/terminal/terminal_state.cpp
@@ -82,7 +86,7 @@ info:
 	@echo "SDL2_PREFIX: $(SDL2_PREFIX)"
 
 clean:
-	rm -f $(OBJS) $(DEPS) $(BIN) test_terminal.exe
+	rm -f $(OBJS) $(DEPS) $(BIN) test_terminal.exe test_gpio_flag.exe
 
 rebuild: clean all
 
