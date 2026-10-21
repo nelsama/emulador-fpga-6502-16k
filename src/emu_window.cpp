@@ -395,12 +395,13 @@ void EmuWindow::clic_en(int x, int y) {
     for (const Zona& z : zonas_) {
       if (x < z.x || x >= z.x + z.w || y < z.y || y >= z.y + z.h) continue;
       if (z.accion == "menu_toggle") {
-        menu_ = (menu_ == MenuEstado::Abierto) ? MenuEstado::Cerrado
-                                               : MenuEstado::Abierto;
-      } else if (z.accion == "menu_ver") {
-        // "Ver": abre el menú y pide el listado actualizado.
-        menu_ = MenuEstado::Abierto;
-        if (on_sd_accion) on_sd_accion("list", "");
+        if (menu_ == MenuEstado::Abierto) {
+          menu_ = MenuEstado::Cerrado;
+        } else {
+          menu_ = MenuEstado::Abierto;
+          // Al abrir se pide el listado actualizado de la tarjeta.
+          if (on_sd_accion) on_sd_accion("list", "");
+        }
       } else if (z.accion == "delete_archivo") {
         if (on_sd_accion) on_sd_accion("delete", z.arg);
         menu_ = MenuEstado::Cerrado;
@@ -673,9 +674,7 @@ void EmuWindow::dibujar_menu(void* renderer, int /*alto_panel*/) {
   };
 
   int x = 6;
-  x = boton(x, "SD", menu_ == MenuEstado::Abierto, "menu_toggle");
-  x += 4;
-  boton(x, "Ver", false, "menu_ver");
+  boton(x, "SD", menu_ == MenuEstado::Abierto, "menu_toggle");
 
   if (menu_ == MenuEstado::Abierto) {
     // Desplegable debajo de la barra, con las acciones y el listado.

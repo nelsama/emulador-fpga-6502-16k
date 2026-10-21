@@ -875,10 +875,10 @@ SID ($D400-$D41F):
 
 #### Menú SD (gestión de archivos en caliente)
 
-Arriba del panel hay una **franja de menú** con `SD` y `Ver`:
+Arriba del panel hay una **franja de menú** con un único botón `SD`:
 
 ```
-[ SD ] [ Ver ]
+[ SD ]
  ├─ Añadir archivo...    (diálogo nativo de Windows)
  ├─ Borrar archivo...
  ├─ Re-montar SD
@@ -890,8 +890,9 @@ Arriba del panel hay una **franja de menú** con `SD` y `Ver`:
 - **Borrar archivo...**: borra el archivo seleccionado del listado.
 - **Re-montar SD**: manda `sd` al monitor para que **relea el directorio**.
   Hace falta porque el firmware cachea el listado al montar.
-- **Ver**: despliega el menú y pide el listado actualizado.
-- Clic fuera del menú (en el panel) o elegir una acción lo cierra.
+- **Un clic en `SD`** despliega el menú y **pide el listado actualizado** de la
+  tarjeta; otro clic lo cierra.
+- Clic fuera del menú (en el panel) o elegir una acción también lo cierra.
 
 Todo es **clicable con el ratón**. La franja ocupa 24 px y la ventana crece
 otros 24 para que la consola conserve sus 24 filas.
