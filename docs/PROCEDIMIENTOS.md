@@ -389,6 +389,38 @@ caché. Y nada de dibujar píxel a píxel con una llamada SDL por píxel.
 
 ---
 
+## 8bis. Socket del UART que no se libera (CLOSE_WAIT)
+
+Síntoma reportado: tras la primera sesión por el puerto 4000, las siguientes
+daban **connection refused** aunque el emulador seguía vivo (el 8080 respondía).
+`netstat -ano | findstr :4000` mostraba una línea en `CLOSE_WAIT`.
+
+Causa: en `TcpServer::poll()` cualquier `recv() < 0` se trataba como "no hay
+datos ahora". Pero `recv()` devuelve -1 también con la conexión rota
+(`WSAECONNRESET`, `WSAECONNABORTED`...), y en ese caso hay que cerrar el
+cliente. Al no hacerlo, `client_` apuntaba para siempre a un socket muerto y no
+se volvía a llamar a `accept()`.
+
+Arreglo: distinguir el error transitorio (`WSAEWOULDBLOCK`, `WSAEINTR`) del
+definitivo; en el segundo caso, `close_client()` con el motivo en el log.
+
+Verificación (6 reconexiones abruptas, sin leer ni `shutdown`):
+
+| Antes | Después |
+|---|---|
+| queda un socket en `CLOSE_WAIT` | **0** sockets en `CLOSE_WAIT` |
+| 2ª conexión puede fallar | 6/6 conexiones OK |
+
+```
+Cliente conectado
+Cliente desconectado (conexión perdida (error 10054))
+```
+
+**Regla:** un `recv()`/`send()` que devuelve error nunca es "solo
+transitorio" sin comprobar el código. Y el log debe decir el motivo.
+
+---
+
 ## 9. Trampas encontradas
 
 Esta sección es la más importante del documento. Cada punto costó tiempo real.

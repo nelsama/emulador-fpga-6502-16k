@@ -82,21 +82,86 @@ Para lanzarlo a mano (Windows), **desacoplado**:
 
 ```powershell
 Start-Process -FilePath '.\emulador.exe' `
-  -ArgumentList 'rom/monitor.bin','4000','tarjeta.img','--debug' `
-  -RedirectStandardOutput '.tmp\out.log' -RedirectStandardError '.tmp\err.log'
+  -ArgumentList 'rom\monitor.bin','4000','tarjeta.img','--debug=8080' `
+  -WorkingDirectory (Get-Location) `
+  -RedirectStandardOutput '.tmp\o.log' `
+  -RedirectStandardError  '.tmp\e.log'
 ```
+
+- **Las redirecciones son obligatorias.** Sin `-RedirectStandardOutput`, el
+  proceso hereda la consola del lanzador y la salida puede llenar el pipe y
+  **bloquear** el emulador.
+- `-WorkingDirectory` evita sustos si el lanzador cambia de carpeta: la ROM y
+  `tarjeta.img` se buscan relativas a ella.
+- `nohup ... &` **no** sirve en Windows: no existe `nohup` real y el proceso
+  queda en el árbol del shell, que se lo lleva por delante al terminar la
+  llamada. Por eso hay que usar `Start-Process` o `emu_agent.py start`.
 
 ### Cargar un programa por el UART
 
+**El UART acepta UNA sola conexión a la vez.** Mientras hay un cliente
+conectado, un segundo `connect()` al 4000 no se atiende (queda en la cola del
+`listen` y parece "conectar" sin recibir nada). Abre **una** conexión por
+sesión, manda todos los comandos por ella y ciérrala al final.
+
 ```python
 import socket, time
-s = socket.create_connection(('127.0.0.1', 4000), 3)
-s.sendall(b'load PACMAN.BIN 0800\r'); time.sleep(2.0)
-s.sendall(b'r 0800\r'); time.sleep(3.0)
+
+def sesion(comandos):
+    """Abre una conexion, manda los comandos y la cierra limpiamente."""
+    s = socket.create_connection(('127.0.0.1', 4000), 3)
+    try:
+        for cmd, espera in comandos:
+            s.sendall(cmd.encode() + b'\r')
+            time.sleep(espera)
+    finally:
+        # Cierre ordenado: manda FIN (recv() del emulador devuelve 0).
+        try:
+            s.shutdown(socket.SHUT_WR)
+        except OSError:
+            pass
+        s.close()
+
+sesion([('load PACMAN.BIN 0800', 2.0), ('r 0800', 3.0)])
 ```
 
 La **dirección de carga debe coincidir con la de enlace del binario**. Si no,
 el programa ejecuta basura y no avisa.
+
+#### Reconectar por comando es un antipatrón
+
+```python
+def enviar(cmd):                       # MAL
+    s = socket.create_connection(('127.0.0.1', 4000), 3)
+    s.sendall(cmd); time.sleep(0.9); s.close()
+```
+
+Cada llamada abre y cierra un socket. Si el cierre es abrupto (sin leer y sin
+`shutdown`), Windows envía un **RST**. El emulador lo detecta y libera el
+cliente desde `639b92b`, pero **seguir reconectando sigue siendo frágil**: cada
+conexión nueva reinicia la sesión del terminal y se pierde la salida intermedia.
+
+#### Si el puerto 4000 deja de aceptar conexiones
+
+Síntoma: `connection refused` aunque el emulador esté vivo (el 8080 responde).
+
+```powershell
+netstat -ano | findstr :4000     # busca una linea en CLOSE_WAIT
+python tools/emu_agent.py stop
+python tools/emu_agent.py start
+```
+
+El log del emulador dice el motivo al desconectar:
+
+```
+Cliente conectado
+Cliente desconectado (conexión perdida (error 10054))   <- RST del cliente
+Cliente desconectado (el cliente cerró)                 <- FIN limpio
+```
+
+El **error 10054** es `WSAECONNRESET`: el cliente cerró sin leer lo pendiente o
+se mató el proceso. No es un fallo del emulador, pero indica que el script
+debería cerrar con `shutdown(SHUT_WR)`.
 
 ---
 

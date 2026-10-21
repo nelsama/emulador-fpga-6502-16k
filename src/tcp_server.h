@@ -41,7 +41,7 @@ public:
 
 private:
   void set_nonblocking(socket_t s);
-  void close_client();
+  void close_client(const char* motivo = nullptr);
 
   socket_t listen_ = INVALID_SOCKET;
   socket_t client_ = INVALID_SOCKET;
