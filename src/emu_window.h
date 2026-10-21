@@ -66,7 +66,10 @@ public:
 
   // Estado del terminal (80x24) que refleja la salida del UART. Se copia una
   // vez por fotograma: Main lo actualiza desde Uart::terminal().
-  void set_terminal(const TerminalState& term) { term_ = term; }
+  void set_terminal(const TerminalState& term) {
+    term_ = term;
+    term_sucio_ = true;  // el estado puede traer sucio=false aunque cambie
+  }
   bool has_terminal() const { return terminal_; }
 
   // Atiende los eventos: cierra la ventana o actualiza el joystick.
@@ -107,6 +110,10 @@ private:
   // Dibuja la rejilla del terminal dentro de un rectángulo.
   void dibujar_terminal(void* renderer, const void* caja);
 
+  // Dibuja placa + LEDs + puerto 1 en su textura de caché (solo si cambió el
+  // estado). Devuelve la textura lista para copiar en (x, y).
+  void* panel_cache(int x, int y, uint8_t leds);
+
   // Alt+Intro recorre los modos de vista (equivale a F11).
   void poll_alt_enter();
 
@@ -124,6 +131,20 @@ private:
   void* window_ = nullptr;
   void* renderer_ = nullptr;
   void* texture_ = nullptr;
+  // Textura de la consola: se pinta en un buffer y se sube de una vez, en vez
+  // de dibujar miles de rectangulos por fotograma (era el cuello de botella).
+  void* term_tex_ = nullptr;
+  std::vector<uint32_t> term_px_;  // buffer 640x384 de la consola
+  bool term_sucio_ = true;         // hay que regenerar term_px_
+
+  // Cache del panel de estado (placa + LEDs + puerto 1) en una textura: solo
+  // se redibuja cuando cambian los LEDs o los pines, no en cada fotograma.
+  void* panel_tex_ = nullptr;
+  int panel_tex_w_ = 0, panel_tex_h_ = 0;
+  uint8_t cache_leds_ = 0xFF;
+  uint8_t cache_p1v_ = 0xFF;
+  uint8_t cache_p1d_ = 0xFF;
+  bool cache_valida_ = false;
   int w_ = 320;
   int h_ = 240;
   int scale_ = 3;

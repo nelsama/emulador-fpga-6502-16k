@@ -191,6 +191,29 @@ se suma aparte y **no se puede medir desde el emulador**.
 Si sube continuamente, la causa típica es **desajuste de frecuencias**: el
 generador produce más o menos muestras que las que consume el dispositivo.
 
+**Pero no es la única.** Antes hubo otra que costó encontrar porque el síntoma
+no apuntaba al audio: Pac-Man daba **micro-congelamientos** cada pocos segundos.
+
+El bucle reponía el colchón así:
+
+```cpp
+const long max_step = audio.frequency() / 1000;   // 1 ms por vuelta
+want += std::min(deficit, max_step);
+```
+
+El bucle da ~500 vueltas/s (cada una emula ~2 ms de CPU), así que se generaban
+como mucho **500 ms de audio por segundo**, la mitad de lo que consume el
+dispositivo. El anillo se vaciaba una y otra vez y el sistema se quedaba sin
+sonido a trozos.
+
+Cómo se detectó: `EMU_TRACE=1` y mirar `underrun` con el **juego en marcha**.
+Con el juego parado el síntoma casi no aparece, lo que despistó al principio.
+
+**Lección:** los `underrun` no siempre son desajuste de frecuencia; también
+pueden ser que el generador no dé abasto por un tope artificial. Y conviene
+medir con el juego **jugando**, no recién cargado: una pantalla estática esconde
+estos fallos.
+
 ---
 
 ## 5. Verificar el joystick
@@ -343,6 +366,26 @@ Qué mirar, comparando con PuTTY:
 El programa de referencia usado fue el Tetris de consola
 (`tetris.bin`, 6 KB): al arrancar muestra `SCORE/LINES/LEVEL` arriba a la
 derecha, dos carriles con marcos verticales y las fichas como `[]`.
+
+---
+
+### 4.4 Coste del dibujado
+
+El bucle tiene 16,7 ms por fotograma y el emulador da ~500 vueltas/s, así que
+cualquier cosa que se haga "cada fotograma" se multiplica por 60. Dos costes
+que pasaban desapercibidos:
+
+| Qué | Antes | Ahora |
+|---|---|---|
+| Consola del panel | ~57.000 rectángulos SDL por fotograma | una textura 640×384 |
+| Placa + LEDs + puerto 1 | redibujados 60 veces/s | textura cacheada, solo si cambia |
+| Total `present` | 3,17 ms | 1,23 ms |
+
+Cómo medirlo: `EMU_TRACE=1` y el campo `dibujo` del informe cada 5 s. Para
+separar el vídeo del panel, comparar con la vista "solo vídeo" (sin panel).
+
+**Regla:** en `present()`, lo que no cambia cada fotograma va a una textura con
+caché. Y nada de dibujar píxel a píxel con una llamada SDL por píxel.
 
 ---
 

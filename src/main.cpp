@@ -355,8 +355,16 @@ int main(int argc, char** argv) {
       } else {
         const long deficit = objetivo - nivel;
         if (deficit > 0) {
-          const long max_step = (long)(audio.frequency() / 1000); // 1 ms
-          want += (int)std::min(deficit, max_step);
+          // Cuánto audio falta para llenar el colchón, en muestras.
+          //
+          // Antes se sumaba como máximo 1 ms por vuelta, pero el bucle solo da
+          // ~500 vueltas/s (cada una emula ~2 ms de CPU): se generaba como
+          // mucho la MITAD del audio que consume el dispositivo, y el resto
+          // eran underruns (silencio intermitente y sonido a tirones).
+          // El límite por vuelta debe cubrir el déficit completo; lo que evita
+          // pasarse de largo es la comprobación de "sobra más de 5 ms" de
+          // arriba, no este tope.
+          want += (int)deficit;
         }
       }
 

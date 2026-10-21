@@ -16,6 +16,7 @@
 
 EmuWindow::~EmuWindow() {
 #ifdef HAVE_SDL2
+  if (term_tex_) SDL_DestroyTexture(static_cast<SDL_Texture*>(term_tex_));
   if (texture_) SDL_DestroyTexture(static_cast<SDL_Texture*>(texture_));
   if (renderer_) SDL_DestroyRenderer(static_cast<SDL_Renderer*>(renderer_));
   if (window_) SDL_DestroyWindow(static_cast<SDL_Window*>(window_));
@@ -394,50 +395,215 @@ void EmuWindow::clic_en(int x, int y) {
 }
 
 // Pinta la rejilla 80x24 del terminal dentro de `caja`, con sus colores.
+//
+// IMPORTANTE (rendimiento): la rejilla tiene 80x24 = 1920 celdas y cada glifo
+// CP437 tiene hasta ~60 píxeles encendidos. Dibujar eso con rectángulos SDL
+// eran ~57.000 llamadas por fotograma (3,5 millones por segundo), que se comían
+// 3 ms de los 16,7 disponibles y hacían que el audio se quedara sin datos
+// (underruns) y el juego fuera a tirones.
+//
+// Ahora se compone la imagen en un búfer de 640x384 (memoria) y se sube a una
+// textura de una vez: trabajo proporcional a los píxeles, no a las llamadas.
 void EmuWindow::dibujar_terminal(void* renderer, const void* caja) {
 #ifdef HAVE_SDL2
   SDL_Renderer* ren = static_cast<SDL_Renderer*>(renderer);
   const SDL_Rect* term = static_cast<const SDL_Rect*>(caja);
-  const int f = TERM_SCALE;
-  const int cw = 8 * f;
-  const int chh = 16 * f;
-  const int x0 = term->x + TERM_PAD / 2;
-  const int y0 = term->y + TERM_PAD / 2;
 
-  for (int fila = 0; fila < TerminalState::ROWS; fila++) {
-    for (int col = 0; col < TerminalState::COLS; col++) {
-      const TerminalState::Celda& celda = term_.celda(fila, col);
-      // Color efectivo: el inverso intercambia tinta y fondo.
-      int fg = celda.at.fg & 15;
-      int bg = celda.at.bg & 15;
-      if (celda.at.negrita) fg |= 8;
-      if (celda.at.inverso) {
-        const int t = fg;
-        fg = bg;
-        bg = t;
-      }
-      const int px = x0 + col * cw;
-      const int py = y0 + fila * chh;
+  const int ancho = TerminalState::COLS * 8;
+  const int alto = TerminalState::ROWS * 16;
 
-      // Fondo de la celda (solo si no es negro: ahorra miles de rectángulos
-      // en pantallas casi vacías).
-      if (bg != 0) {
-        SDL_Rect r{px, py, cw, chh};
-        SDL_SetRenderDrawColor(ren, kAnsi[bg].r, kAnsi[bg].g, kAnsi[bg].b, 255);
-        SDL_RenderFillRect(ren, &r);
-      }
-      if (celda.ch > 0x20) {
-        draw_glyph_cp437(ren, px, py, f, celda.ch, kAnsi[fg]);
+  if (!term_tex_) {
+    term_tex_ = SDL_CreateTexture(ren, SDL_PIXELFORMAT_ARGB8888,
+                                  SDL_TEXTUREACCESS_STREAMING, ancho, alto);
+    if (!term_tex_) return;
+    term_px_.assign((size_t)ancho * alto, 0);
+    term_sucio_ = true;
+  }
+
+  // Solo se recompone si el terminal ha cambiado desde el último fotograma.
+  if (term_.sucio() || term_sucio_) {
+    term_.limpiar_sucio();
+    term_sucio_ = false;
+    term_px_.assign((size_t)ancho * alto, 0x000000);
+
+    for (int fila = 0; fila < TerminalState::ROWS; fila++) {
+      for (int col = 0; col < TerminalState::COLS; col++) {
+        const TerminalState::Celda& celda = term_.celda(fila, col);
+        // Color efectivo: el inverso intercambia tinta y fondo.
+        int fg = celda.at.fg & 15;
+        int bg = celda.at.bg & 15;
+        if (celda.at.negrita) fg |= 8;
+        if (celda.at.inverso) {
+          const int t = fg;
+          fg = bg;
+          bg = t;
+        }
+        const SDL_Color& cf = kAnsi[fg];
+        const SDL_Color& cb = kAnsi[bg];
+        const uint32_t col_fg = ((uint32_t)cf.r << 16) | ((uint32_t)cf.g << 8) | cf.b;
+        const uint32_t col_bg = ((uint32_t)cb.r << 16) | ((uint32_t)cb.g << 8) | cb.b;
+
+        const uint8_t* g = &kFontCp437[(size_t)celda.ch * 16];
+        uint32_t* dst = term_px_.data() + (size_t)fila * 16 * ancho + (size_t)col * 8;
+        for (int y = 0; y < 16; y++) {
+          const uint8_t bits = g[y];
+          uint32_t* linea = dst + (size_t)y * ancho;
+          for (int x = 0; x < 8; x++) {
+            linea[x] = (bits & (0x80 >> x)) ? col_fg : col_bg;
+          }
+        }
       }
     }
+    SDL_UpdateTexture(static_cast<SDL_Texture*>(term_tex_), nullptr,
+                      term_px_.data(), ancho * (int)sizeof(uint32_t));
   }
+
+  SDL_RenderCopy(ren, static_cast<SDL_Texture*>(term_tex_), nullptr, term);
 
   // Cursor: bloque hueco (marco de 1 px) en la posición actual, si está visible.
   if (term_.cursor_visible()) {
-    SDL_Rect c{x0 + term_.cursor_col() * cw, y0 + term_.cursor_fila() * chh, cw, chh};
+    const int x0 = term->x + TERM_PAD / 2;
+    const int y0 = term->y + TERM_PAD / 2;
+    SDL_Rect c{x0 + term_.cursor_col() * 8, y0 + term_.cursor_fila() * 16, 8, 16};
     SDL_SetRenderDrawColor(ren, 220, 235, 220, 255);
     SDL_RenderDrawRect(ren, &c);
   }
+#endif
+}
+
+// Dibuja placa + LEDs + puerto 1 en una textura y la devuelve. Solo repinta si
+// cambió algo (LEDs, valor o dirección del puerto 1): antes se redibujaban
+// cientos de primitivas SDL en CADA fotograma (~1,5 ms de los 16,7 ms
+// disponibles, que se notaban como tirones en Pac-Man).
+void* EmuWindow::panel_cache(int x, int y, uint8_t leds) {
+#ifdef HAVE_SDL2
+  SDL_Renderer* ren = static_cast<SDL_Renderer*>(renderer_);
+  const int alto = 12 + 46 + 6 + (30 + 12 + 8 * FILA_P1 + 4) + 6;
+
+  if (!panel_tex_ || panel_tex_w_ != panel_w_ || panel_tex_h_ != alto) {
+    if (panel_tex_) SDL_DestroyTexture(static_cast<SDL_Texture*>(panel_tex_));
+    panel_tex_ = SDL_CreateTexture(ren, SDL_PIXELFORMAT_ARGB8888,
+                                   SDL_TEXTUREACCESS_TARGET, panel_w_, alto);
+    panel_tex_w_ = panel_w_;
+    panel_tex_h_ = alto;
+    cache_valida_ = false;
+  }
+  if (!panel_tex_) return nullptr;
+
+  const bool cambia = !cache_valida_ || leds != cache_leds_ ||
+                      port1_valor_ != cache_p1v_ || port1_dir_ != cache_p1d_;
+  if (cambia) {
+    cache_valida_ = true;
+    cache_leds_ = leds;
+    cache_p1v_ = port1_valor_;
+    cache_p1d_ = port1_dir_;
+
+    SDL_SetRenderTarget(ren, static_cast<SDL_Texture*>(panel_tex_));
+    SDL_SetRenderDrawColor(ren, 34, 37, 43, 255);
+    SDL_RenderClear(ren);
+
+    int y = 12;  // cursor vertical dentro del panel
+
+    // --- Placa Tang Nano 9K con sus 6 LEDs ---
+    const int board_w = 6 * 30 + 34;
+    const int board_h = 46;
+    const int board_x = (panel_w_ - board_w) / 2;
+    SDL_Rect board{board_x, y, board_w, board_h};
+    fill_round_rect(ren, board, 8, SDL_Color{18, 40, 30, 255});
+    SDL_SetRenderDrawColor(ren, 30, 70, 52, 255);
+    SDL_RenderDrawRect(ren, &board);
+
+    {
+      const int radius = 7;
+      const int spacing = 30;
+      const int first_x = board_x + 26;
+      const int cy = y + board_h / 2;
+      for (int i = 0; i < 6; i++) {
+        draw_led(ren, first_x + i * spacing, cy, radius, (leds >> i) & 1);
+      }
+    }
+    y += board_h + 6;
+
+    // --- Pines del puerto 1 (joystick Atari / DB9) ---
+    {
+      struct Fila { int bit; int pin; const char* senal; };
+      static const Fila filas[8] = {
+          {7, 29, "fuego"}, {6, 30, "arriba"}, {5, 33, "abajo"}, {4, 34, "izq"},
+          {3, 40, "der"},   {2, 35, "--"},     {1, 41, "--"},    {0, 42, "--"},
+      };
+
+      const bool aviso = (port1_dir_ & 0xF8) != 0xF8;
+      const int alto_modulo = (aviso ? 30 : 20) + 12 + 8 * FILA_P1 + 4;
+      const int mx = PANEL_MARGEN;
+      const int mw = panel_w_ - 2 * PANEL_MARGEN;
+      SDL_Rect mod{mx, y, mw, alto_modulo};
+      fill_round_rect(ren, mod, 6, SDL_Color{24, 28, 34, 255});
+      SDL_SetRenderDrawColor(ren, 44, 50, 60, 255);
+      SDL_RenderDrawRect(ren, &mod);
+
+      SDL_SetRenderDrawColor(ren, 120, 140, 165, 255);
+      const char* titulo = "PUERTO 1 - JOYSTICK (DB9)";
+      for (int c = 0; titulo[c]; c++) {
+        draw_glyph(ren, mx + 10 + c * TERM_CW, y + 7, titulo[c], TERM_SCALE);
+      }
+
+      if (aviso) {
+        SDL_SetRenderDrawColor(ren, 230, 170, 90, 255);
+        const char* w = "bits 3-7 no son entrada (falta joy_init)";
+        const int maxc = (mw - 20) / TERM_CW;
+        for (int c = 0; w[c] && c < maxc; c++) {
+          draw_glyph(ren, mx + 10 + c * TERM_CW, y + 20, w[c], TERM_SCALE);
+        }
+      }
+
+      const int y0 = y + (aviso ? 30 : 20);
+      SDL_SetRenderDrawColor(ren, 200, 210, 225, 255);
+      static const char* kCab = "bit pin senal   modo nivel";
+      for (int c = 0; kCab[c]; c++) {
+        draw_glyph(ren, mx + 10 + c * TERM_CW, y0, kCab[c], TERM_SCALE);
+      }
+
+      const int xcol = mx + 10;
+      const int cw = TERM_CW;
+      for (int i = 0; i < 8; i++) {
+        const Fila& f = filas[i];
+        const int ly = y0 + 14 + i * FILA_P1;
+        const bool entrada = (port1_dir_ >> f.bit) & 1;
+        const bool nivel = (port1_valor_ >> f.bit) & 1;
+        const bool es_joy = f.bit >= 3;
+
+        char linea[64];
+        std::snprintf(linea, sizeof linea, "%d   %2d  %-7s %-6s", f.bit, f.pin,
+                      f.senal, entrada ? "IN" : "OUT");
+        if (es_joy) SDL_SetRenderDrawColor(ren, 200, 215, 230, 255);
+        else        SDL_SetRenderDrawColor(ren, 110, 120, 135, 255);
+        for (int c = 0; linea[c]; c++) {
+          draw_glyph(ren, xcol + c * cw, ly, linea[c], TERM_SCALE);
+        }
+
+        const int bx = xcol + 23 * cw;
+        const int by = ly + 4;
+        if (nivel) {
+          if (es_joy && entrada && !nivel) SDL_SetRenderDrawColor(ren, 255, 170, 60, 255);
+          else SDL_SetRenderDrawColor(ren, 90, 220, 140, 255);
+          fill_circle(ren, bx, by, 5);
+        } else {
+          SDL_SetRenderDrawColor(ren, 60, 70, 84, 255);
+          fill_circle(ren, bx, by, 5);
+          SDL_SetRenderDrawColor(ren, 20, 24, 30, 255);
+          fill_circle(ren, bx, by, 3);
+        }
+      }
+    }
+
+    SDL_SetRenderTarget(ren, nullptr);
+  }
+  (void)x;
+  (void)y;
+  return panel_tex_;
+#else
+  (void)x; (void)y; (void)leds;
+  return nullptr;
 #endif
 }
 
@@ -546,116 +712,13 @@ void EmuWindow::present(const uint32_t* rgb, uint8_t leds) {
     SDL_SetRenderDrawColor(ren, 52, 57, 66, 255);
     SDL_RenderDrawLine(ren, panel_w_ - 1, 0, panel_w_ - 1, area_h);
 
-    int y = 12; // cursor vertical dentro del panel
-
-    // --- Módulo 1: placa Tang Nano 9K con sus 6 LEDs ---
-    const int board_w = 6 * 30 + 34;
-    const int board_h = 46;
-    const int board_x = (panel_w_ - board_w) / 2;
-    SDL_Rect board{board_x, y, board_w, board_h};
-    fill_round_rect(ren, board, 8, SDL_Color{18, 40, 30, 255});
-    SDL_SetRenderDrawColor(ren, 30, 70, 52, 255);
-    SDL_RenderDrawRect(ren, &board);
-
-    const int radius = 7;
-    const int spacing = 30;
-    const int first_x = board_x + 26;
-    const int cy = y + board_h / 2;
-    for (int i = 0; i < 6; i++) {
-      draw_led(ren, first_x + i * spacing, cy, radius, (leds >> i) & 1);
-    }
-    y += board_h + 6;
-
-    // --- Módulo 2: pines del puerto 1 (joystick Atari / DB9) ---
-    //
-    // Se listan los 8 bits en orden descendente (bit 7 arriba), que es como se
-    // lee el registro: así coincide con la tabla de /state.txt y con el orden
-    // físico del conector. El número de pin es el del FPGA (6502_board.cst).
-    // Todo es estado del hardware: modo (entrada/salida) y nivel (1/0).
-    {
-      struct Fila { int bit; int pin; const char* senal; };
-      // Pines del puerto 1, por bit.
-      static const int kPinP1[8] = {42, 41, 35, 40, 34, 33, 30, 29};
-      static const Fila filas[8] = {
-          {7, 29, "fuego"}, {6, 30, "arriba"}, {5, 33, "abajo"}, {4, 34, "izq"},
-          {3, 40, "der"},   {2, 35, "--"},     {1, 41, "--"},    {0, 42, "--"},
-      };
-      (void)kPinP1;
-
-      // Aviso si el programa no ha configurado los bits 3-7 como entrada.
-      const bool aviso = (port1_dir_ & 0xF8) != 0xF8;
-
-      const int alto_modulo = (aviso ? 30 : 20) + 12 + 8 * FILA_P1 + 4; // título + cabecera + filas
-      const int mx = PANEL_MARGEN;
-      const int mw = panel_w_ - 2 * PANEL_MARGEN;
-      SDL_Rect mod{mx, y, mw, alto_modulo};
-      fill_round_rect(ren, mod, 6, SDL_Color{24, 28, 34, 255});
-      SDL_SetRenderDrawColor(ren, 44, 50, 60, 255);
-      SDL_RenderDrawRect(ren, &mod);
-
-      // Título del módulo.
-      SDL_SetRenderDrawColor(ren, 120, 140, 165, 255);
-      const char* titulo = "PUERTO 1 - JOYSTICK (DB9)";
-      for (int c = 0; titulo[c]; c++) {
-        draw_glyph(ren, mx + 10 + c * TERM_CW, y + 7, titulo[c], TERM_SCALE);
-      }
-
-      // Cabecera de columnas (si hay ancho para ello).
-      if (aviso) {
-        SDL_SetRenderDrawColor(ren, 230, 170, 90, 255);
-        const char* w = "bits 3-7 no son entrada (falta joy_init)";
-        const int maxc = (mw - 20) / TERM_CW;
-        for (int c = 0; w[c] && c < maxc; c++) {
-          draw_glyph(ren, mx + 10 + c * TERM_CW, y + 20, w[c], TERM_SCALE);
-        }
-      }
-
-      // Columnas: bit | pin | señal | modo | nivel (bolita).
-      const int y0 = y + (aviso ? 34 : 24);
-      SDL_SetRenderDrawColor(ren, 200, 210, 225, 255);
-      static const char* kCab = "bit pin senal   modo nivel";
-      for (int c = 0; kCab[c]; c++) {
-        draw_glyph(ren, mx + 10 + c * TERM_CW, y0, kCab[c], TERM_SCALE);
-      }
-
-      const int xcol = mx + 10;
-      const int cw = TERM_CW;
-      for (int i = 0; i < 8; i++) {
-        const Fila& f = filas[i];
-        const int ly = y0 + 14 + i * FILA_P1;
-        const bool entrada = (port1_dir_ >> f.bit) & 1;
-        const bool nivel = (port1_valor_ >> f.bit) & 1;
-        const bool es_joy = f.bit >= 3;
-
-        // Texto de la fila. Se compone con snprintf para no repetir código.
-        char linea[64];
-        std::snprintf(linea, sizeof linea, "%d   %2d  %-7s %-6s", f.bit, f.pin,
-                      f.senal, entrada ? "IN" : "OUT");
-        // Gris para los bits que no son del joystick; claro para los usados.
-        if (es_joy) SDL_SetRenderDrawColor(ren, 200, 215, 230, 255);
-        else        SDL_SetRenderDrawColor(ren, 110, 120, 135, 255);
-        for (int c = 0; linea[c]; c++) {
-          draw_glyph(ren, xcol + c * cw, ly, linea[c], TERM_SCALE);
-        }
-
-        // Indicador de nivel: círculo relleno = 1, hueco = 0.
-        const int bx = xcol + 23 * cw;
-        const int by = ly + 4;
-        if (nivel) {
-          // Verde si es una entrada del joystick sin pulsar (activo en bajo),
-          // ámbar si está pulsada (bit a 0).
-          if (es_joy && entrada && !nivel) SDL_SetRenderDrawColor(ren, 255, 170, 60, 255);
-          else SDL_SetRenderDrawColor(ren, 90, 220, 140, 255);
-          fill_circle(ren, bx, by, 5);
-        } else {
-          SDL_SetRenderDrawColor(ren, 60, 70, 84, 255);
-          fill_circle(ren, bx, by, 5);
-          SDL_SetRenderDrawColor(ren, 20, 24, 30, 255);
-          fill_circle(ren, bx, by, 3);
-        }
-      }
-
-      y += alto_modulo + 6;
+    // Placa + LEDs + puerto 1 van cacheados en una textura: son cientos de
+    // llamadas SDL que solo cambian cuando cambia el hardware. La consola va
+    // aparte, en su propia textura.
+    const int alto_estado = 12 + 46 + 6 + (30 + 12 + 8 * FILA_P1 + 4) + 6;
+    if (void* tex_panel = panel_cache(0, 0, leds)) {
+      SDL_Rect dst{0, 0, panel_w_, alto_estado};
+      SDL_RenderCopy(ren, static_cast<SDL_Texture*>(tex_panel), nullptr, &dst);
     }
 
     // --- Módulo 3: terminal del UART (80x24, ANSI + CP437) ---
@@ -663,27 +726,14 @@ void EmuWindow::present(const uint32_t* rgb, uint8_t leds) {
       const int term_x = PANEL_MARGEN;
       const int term_w = panel_w_ - 2 * PANEL_MARGEN;
       const int term_h = TerminalState::ROWS * TERM_CH + 2 * TERM_PAD;  // 80x24 fijo
-      SDL_Rect term{term_x, y, term_w, term_h};
+      const int term_y = alto_estado;
+      SDL_Rect term{term_x, term_y, term_w, term_h};
       SDL_SetRenderDrawColor(ren, 8, 10, 12, 255);
       SDL_RenderFillRect(ren, &term);
       SDL_SetRenderDrawColor(ren, 30, 48, 38, 255);
       SDL_RenderDrawRect(ren, &term);
 
       dibujar_terminal(ren, &term);
-      y += term_h + 8;
-
-      // Indicador de scrollback (solo si hay historial): cuántas líneas hay
-      // guardadas por arriba, para saber que se ha perdido vista.
-      if (!term_.historial().empty()) {
-        char linea[64];
-        std::snprintf(linea, sizeof linea, "scrollback: %zu lineas",
-                      term_.historial().size());
-        SDL_SetRenderDrawColor(ren, 110, 125, 145, 255);
-        const int maxc = (panel_w_ - 2 * PANEL_MARGEN) / TERM_CW;
-        for (int c = 0; linea[c] && c < maxc; c++) {
-          draw_glyph(ren, term_x, y, linea[c], TERM_SCALE);
-        }
-      }
     }
   }
 
