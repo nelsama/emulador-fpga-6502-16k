@@ -46,6 +46,11 @@ public:
 
   // Estado del terminal (80x24, CP437 + ANSI) que refleja lo transmitido.
   const TerminalState& terminal() const { return term_; }
+  // Codificacion de la consola (CP437 o UTF-8). Afecta a como se interpreta
+  // lo que el programa escribe: debe fijarse ANTES de que lleguen los bytes,
+  // por eso no basta con copiar el estado ya decodificado al panel.
+  void set_utf8(bool on) { term_.set_utf8(on); }
+  bool utf8_activo() const { return term_.utf8_activo(); }
 
   // Entrada desde el host (PuTTY). Si RX_VALID ya estaba activo, marca overrun.
   void enqueue_rx(uint8_t v);

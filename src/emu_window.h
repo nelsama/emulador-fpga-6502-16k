@@ -112,6 +112,11 @@ public:
   //            su caché del directorio)
   std::function<void(const std::string& accion, const std::string& arg)> on_sd_accion;
 
+  // El usuario ha cambiado la codificacion de la consola (CP437 <-> UTF-8).
+  // La ventana solo dibuja; quien debe enterarse es el terminal del UART, que
+  // es quien interpreta los bytes que llegan por el cable.
+  std::function<void(bool utf8)> on_codificacion;
+
   // Listado a mostrar en el desplegable (lo rellena main.cpp).
   struct ArchivoSd {
     std::string nombre;

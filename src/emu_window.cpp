@@ -460,11 +460,15 @@ void EmuWindow::clic_en(int x, int y) {
         fila_borrar_ = -1;
         if (on_sd_accion) on_sd_accion("delete", z.arg);
       } else if (z.accion == "codificacion") {
-        // Conmuta CP437 <-> UTF-8 en caliente. Se repinta la consola entera
-        // porque el cambio afecta a todas las celdas ya dibujadas.
-        term_.set_utf8(!term_.utf8_activo());
+        // Conmuta CP437 <-> UTF-8 en caliente. El panel NO decodifica: solo
+        // avisa, porque quien interpreta los bytes del cable es el terminal
+        // del UART. Cambiarlo solo aqui haria que el panel mostrara algo
+        // distinto de lo que ya decodifico el UART.
+        const bool nuevo = !term_.utf8_activo();
+        if (on_codificacion) on_codificacion(nuevo);
+        term_.set_utf8(nuevo);
         term_sucio_ = true;
-        std::printf("Terminal: %s\n", term_.utf8_activo() ? "UTF-8" : "CP437");
+        std::printf("Terminal: %s\n", nuevo ? "UTF-8" : "CP437");
         std::fflush(stdout);
       } else if (z.accion == "rename_archivo") {
         dialogo_.activo = true;
