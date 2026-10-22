@@ -384,6 +384,16 @@ void DebugServer::build_response(Conn& /*c*/, const std::string& head) {
     path = path.substr(0, q);
   }
 
+  // El monitor 6502 cachea el directorio de la MicroFS al montar la tarjeta.
+  // Tras tocar la imagen desde aqui hay que mandarle `sd\r` por el UART para
+  // que lo relea; si no, su LS sigue mostrando la lista vieja. Las rutas de
+  // /sdcard lo hacen solas salvo que se pase ?remount=0.
+  auto remontar = [&]() {
+    if (Uart* u = bus_->uart()) {
+      for (char c : std::string("sd\r")) u->enqueue_rx((uint8_t)c);
+    }
+  };
+
   if (path == "/screen.png") {
     Video* v = bus_->video();
     if (!v) {
@@ -462,6 +472,10 @@ void DebugServer::build_response(Conn& /*c*/, const std::string& head) {
         resp_.body = "OK: " + nombre + " (" + std::to_string(datos.size()) + " bytes)" + NL;
         std::printf("SD: %s inyectado en caliente (%zu bytes)\n", nombre.c_str(),
                     datos.size());
+        if (query.find("remount=0") == std::string::npos) {
+          remontar();
+          resp_.body += "remontado: sd\n";
+        }
       } else {
         resp_.status = "409 Conflict";
         resp_.body = "ERROR: " + err + NL;
@@ -489,6 +503,10 @@ void DebugServer::build_response(Conn& /*c*/, const std::string& head) {
         resp_.body = "uso: /sdcard/rename?name=VIEJO.BIN&to=NUEVO.BIN" + NL;
       } else if (sd_->renombrar_archivo(viejo, nuevo, &err)) {
         resp_.body = "OK: " + viejo + " -> " + nuevo + NL;
+        if (query.find("remount=0") == std::string::npos) {
+          remontar();
+          resp_.body += "remontado: sd\n";
+        }
       } else {
         resp_.status = "404 Not Found";
         resp_.body = "ERROR: " + err + NL;
@@ -512,10 +530,30 @@ void DebugServer::build_response(Conn& /*c*/, const std::string& head) {
         resp_.body = "uso: /sdcard/delete?name=NOMBRE.BIN" + NL;
       } else if (sd_->borrar_archivo(nombre, &err)) {
         resp_.body = "OK: " + nombre + " eliminado" + NL;
+        if (query.find("remount=0") == std::string::npos) {
+          remontar();
+          resp_.body += "remontado: sd\n";
+        }
       } else {
         resp_.status = "404 Not Found";
         resp_.body = "ERROR: " + err + NL;
       }
+    }
+
+  } else if (path == "/sdcard/remount") {
+    // Le manda `sd\r` al monitor (lo mismo que el boton `Remontar` de la
+    // ventana). Solo hace falta si se ha tocado la imagen por fuera o se uso
+    // ?remount=0 en write/delete/rename.
+    if (!sd_ || !sd_->montada()) {
+      resp_.status = "503 Service Unavailable";
+      resp_.body = "sin tarjeta SD" + NL;
+    } else if (bus_->uart()) {
+      remontar();
+      resp_.body = "OK: re-montaje pedido al monitor (sd)" + NL;
+      std::printf("SD: re-montaje pedido al monitor (HTTP)\n");
+    } else {
+      resp_.status = "503 Service Unavailable";
+      resp_.body = "sin UART" + NL;
     }
 
   } else if (path == "/console.txt") {

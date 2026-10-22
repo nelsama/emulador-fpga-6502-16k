@@ -172,9 +172,10 @@ debería cerrar con `shutdown(SHUT_WR)`.
 | `/console.txt` | **Lo más útil** para programas de texto: la pantalla de 80×24 en texto plano |
 | `/console.png` | Captura de la consola con colores (640×384), `?scale=2..4` |
 | `/sdcard/ls` | Archivos de la SD y espacio libre |
-| `POST /sdcard/write?name=X.BIN` | Añade un archivo en caliente (cuerpo = datos) |
-| `/sdcard/delete?name=X.BIN` | Borra un archivo de la imagen |
-| `/sdcard/rename?name=X.BIN&to=Y.BIN` | Renombra un archivo (conserva los datos) |
+| `POST /sdcard/write?name=X.BIN` | Añade un archivo en caliente (cuerpo = datos). Remonta solo |
+| `/sdcard/delete?name=X.BIN` | Borra un archivo de la imagen. Remonta solo |
+| `/sdcard/rename?name=X.BIN&to=Y.BIN` | Renombra un archivo (conserva los datos). Remonta solo |
+| `/sdcard/remount` | Fuerza el re-montaje del monitor (`sd` por el UART) |
 | `/screen.png` | Captura del vídeo del FPGA (320×240), `?scale=2..4` |
 | `/vram.txt` | Tilemap, atributos y OAM en hexadecimal + vista ASCII 40×30 |
 | `/vram.json` | Lo mismo, estructurado |
@@ -188,17 +189,24 @@ curl http://localhost:8080/console.txt
 curl -o ojo.png "http://localhost:8080/screen.png?scale=2"
 curl http://localhost:8080/state.txt | head -40
 
-# Inyectar un binario sin reiniciar el emulador:
+# Inyectar un binario sin reiniciar el emulador (remonta solo):
 curl --data-binary @JUEGO.BIN "http://localhost:8080/sdcard/write?name=JUEGO.BIN"
 curl "http://localhost:8080/sdcard/ls"
 curl "http://localhost:8080/sdcard/rename?name=JUEGO.BIN&to=JUEGO2.BIN"
 curl "http://localhost:8080/sdcard/delete?name=JUEGO2.BIN"
+
+# Forzar el re-montaje (tras tocar la imagen por fuera):
+curl "http://localhost:8080/sdcard/remount"
 ```
 
-Tras inyectar por HTTP, el monitor sigue mostrando el directorio viejo hasta que
-se re-monta: manda `sd\r` por el UART (o pulsa `Remontar` en el módulo SD de la
-ventana). La GUI de la ventana re-monta sola cuando es ella la que añade, borra
-o renombra.
+`write`, `delete` y `rename` **remontan solos** el directorio del monitor para
+que lo vea al instante. Añade `&remount=0` si vas a hacer varias operaciones
+seguidas y prefieres remontar una sola vez al final con `/sdcard/remount`.
+
+> **El monitor cachea el directorio**: `/sdcard/ls` siempre muestra la imagen
+> real, pero el firmware 6502 (`LS`, `LOAD`, `d`) sigue viendo la lista vieja
+> hasta que se re-monta. La ventana re-monta sola cuando es ella la que añade,
+> borra o renombra.
 
 > **El emulador debe ejecutarse FUERA de un sandbox**: abre ventana (SDL2) y
 > escucha en red (4000/8080). Dentro de un sandbox no funciona; lánzalo en el
