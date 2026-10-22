@@ -979,10 +979,31 @@ Los bytes `0x80`-`0xFF` **no se descartan**: se dibujan con la tabla **CP437**,
 la misma que usa la consola de DOS y PuTTY en modo DOS. Por eso se ven los
 marcos `│ ─ ┌ ┐ └ ┘ ═ ║`, los bloques `█ ▓ ▒ ░` y los acentos `á é í ñ`.
 
-Además, el terminal **entiende UTF-8**: si un programa manda texto con
+Además, el terminal **puede entender UTF-8**: si un programa manda texto con
 secuencias multibyte (por ejemplo `E2 99 9E`, la ficha `♞`), el panel lo
-dibuja como **una sola celda** en lugar de tres. El emulador solo decodifica el
-protocolo; los glifos salen de una segunda fuente embebida
+dibuja como **una sola celda** en lugar de tres.
+
+##### El selector CP437 / UTF-8
+
+Unos bytes no dicen si son CP437 o UTF-8. El mismo `0xDB 0xB3` es `█│` en CP437
+**y** una secuencia UTF-8 válida, así que el terminal no puede adivinarlo.
+
+En la cabecera del módulo de consola hay un **botón con la codificación actual**:
+
+```
+Tang Nano 9K - 6502 @ 3.375 MHz              [CP437]   ← clic → [UTF-8]
+```
+
+- **`CP437`** (por defecto): todo byte alto se pinta con la fuente de 256 glifos.
+  Es lo que espera el software clásico (Tetris, editor, monitor).
+- **`UTF-8`**: las secuencias multibyte ocupan una sola celda. Necesario para
+  programas con símbolos modernos (fichas de ajedrez, flechas).
+
+Se cambia **en caliente**, sin reiniciar: el selector avisa al UART, que es quien
+interpreta los bytes según llegan. Si el panel y el UART no coincidieran, el
+panel recibiría texto ya convertido y se vería otra cosa.
+
+Los glifos de este modo salen de una segunda fuente embebida
 (`src/terminal/font_unicode.h`, generada por `tools/gen_font_unicode.py`) que
 cubre estos rangos:
 
@@ -1212,14 +1233,17 @@ src/
     render.cpp         puente para el renderer
 
   terminal/
-    terminal_state.h/.cpp  emulador de terminal 80x24: ANSI + scrollback
+    terminal_state.h/.cpp  emulador de terminal 80x24: ANSI + CP437/UTF-8
     font_cp437.h           fuente CP437 de 256 glifos (generada)
+    font_unicode.h         fuente Unicode de los rangos que CP437 no cubre
+                           (acentos, marcos, bloques, fichas...), generada
 
 third_party/residfp/   núcleo reSIDfp de VICE (audio)
 
 tools/
   gen_font.py          regenera font_c64.h desde font_data.vhd
   gen_font_cp437.py    regenera font_cp437.h (los 256 glifos de CP437)
+  gen_font_unicode.py  regenera font_unicode.h desde un .ttf (DejaVu Sans Mono)
   test_terminal.cpp    pruebas del intérprete de terminal (make test)
   extract_rom.py       extrae la ROM de un rom.vhd
   sd_tool.py           list / info / inject / extract / delete / format

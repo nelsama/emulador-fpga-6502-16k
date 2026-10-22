@@ -181,8 +181,30 @@ debería cerrar con `shutdown(SHUT_WR)`.
 | `/screen.png` | Captura del vídeo del FPGA (320×240), `?scale=2..4` |
 | `/vram.txt` | Tilemap, atributos y OAM en hexadecimal + vista ASCII 40×30 |
 | `/vram.json` | Lo mismo, estructurado |
-| `/state.txt` | CPU/PC, GPIO (joystick + LEDs), Core de Vídeo, SID, UART |
+| `/state.txt` | CPU (PC, registros, flags, ciclos), GPIO (joystick + LEDs), Core de Vídeo, SID, UART |
 | `/ram.bin` | RAM cruda (`?start=&len=`) |
+
+### `/state.txt`: distinguir "calcula" de "colgado"
+
+La sección `CPU:` es lo primero del volcado, porque es lo que se mira al
+depurar un programa que parece parado:
+
+```
+=== ESTADO DEL EMULADOR ===
+CPU:
+  PC=80DE  SP=F7  A=01  X=00  Y=FE  SR=24
+  flags: --U--I--  (N V - B D I Z C)
+  ciclos: 14221182  (4.21 s a 3.375 MHz)
+```
+
+- **`PC` que cambia** entre dos lecturas → el programa ejecuta. Si cae dentro de
+  una rutina conocida (según el `.map` del build), está calculando, no colgado.
+- **`PC` clavado** en la misma dirección → bucle cerrado o espera. Si es un
+  bucle de teclado, es normal; si no, está atascado.
+- **`SP` que baja sin volver** → desbordamiento de pila. En reposo suele rondar
+  `F5`-`FD`.
+- **`ciclos`** sirve para medir cuánto tarda una rutina sin instrumentarla:
+  lee antes y después y resta.
 
 ### Ejemplos
 
@@ -297,8 +319,16 @@ si los bits 3-7 no están en `entrada`, el programa no llamó a `joy_init()`.
   fondo negro. Mismo resultado que ver la ventana, con la fuente Unicode
   embebida para los rangos que CP437 no cubre.
 
-Para comparar con lo que ve un humano por PuTTY: PuTTY debe estar en modo DOS
-(CP437). Ver [`PUTTY-SETUP.md`](PUTTY-SETUP.md).
+Para comparar con lo que ve un humano por PuTTY: si el programa usa CP437, PuTTY
+debe estar en modo DOS (CP437); si usa UTF-8 (fichas de ajedrez, por ejemplo),
+PuTTY debe estar en UTF-8. En el emulador se elige con el **botón del panel**
+(`CP437` / `UTF-8`) y debe coincidir con lo que espere el programa. Ver
+[`PUTTY-SETUP.md`](PUTTY-SETUP.md).
+
+> Nota: `/console.txt` devuelve la rejilla ya decodificada por el terminal, así
+> que refleja el modo elegido en el panel. Para texto CP437 clásico sale crudo; con
+> UTF-8 activo, cada carácter va en una sola celda (un byte CP437, no la
+> secuencia UTF-8 original).
 
 ---
 
