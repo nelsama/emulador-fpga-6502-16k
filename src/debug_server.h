@@ -42,6 +42,9 @@ public:
   // Tarjeta SD para los endpoints /sdcard/*. nullptr = sin tarjeta montada.
   void set_sdcard(class SdCardImpl* sd) { sd_ = sd; }
 
+  // CPU para incluir PC/registros en /state.txt. nullptr = sin datos de CPU.
+  void set_cpu(class Cpu6502* cpu) { cpu_ = cpu; }
+
 private:
   struct Conn;
   struct Response {
@@ -65,6 +68,7 @@ private:
   int port_ = 0;
   Bus* bus_ = nullptr;
   class SdCardImpl* sd_ = nullptr;
+  class Cpu6502* cpu_ = nullptr;
   // Cuerpo de la petición en curso (POST). Vacío en GET.
   std::string cuerpo_peticion_;
   Response resp_;

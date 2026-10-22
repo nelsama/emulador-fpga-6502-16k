@@ -31,12 +31,20 @@ public:
   // Ciclos consumidos por la última instrucción ejecutada (2-7 en el 6502).
   int last_cycles() const { return last_cycles_; }
 
+  // Ciclos totales desde el arranque (solo para diagnóstico). Sirve para medir
+  // cuánto tarda una rutina a 3.375 MHz sin instrumentar el programa.
+  uint64_t ciclos_totales() const { return ciclos_totales_; }
+
+  // Reset desactiva el contador: los ciclos se refieren a la ejecución actual.
+  void reiniciar_ciclos() { ciclos_totales_ = 0; }
+
 private:
   // Registros
   uint16_t pc_ = 0;
   uint8_t  a_ = 0, x_ = 0, y_ = 0, sp_ = 0;
   uint8_t  sr_ = 0; // N V - B D I Z C
   int      last_cycles_ = 2;
+  uint64_t ciclos_totales_ = 0;
 
   Bus& bus_;
 

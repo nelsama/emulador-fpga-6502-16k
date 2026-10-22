@@ -3,6 +3,7 @@
 #include <cstdio>
 
 #include "font_cp437.h"
+#include "font_unicode.h"
 
 // Intérprete de terminal para el panel de depuración. Ver terminal_state.h para
 // el alcance y el porqué de cada decisión.
@@ -105,14 +106,128 @@ void TerminalState::feed(uint8_t b) {
 
   if (b < 0x20 || b == 0x7F) return;  // otros controles: sin efecto
 
-  // 0x80-0xFF se escriben tal cual: el dibujo los resuelve con CP437.
+  // --- UTF-8 ---
+  //
+  // El sistema es CP437 y el panel dibuja una tabla CP437 de 8x16, pero un
+  // programa cualquiera puede mandar UTF-8: '♞' es E2 99 9E. Sin decodificar,
+  // esos tres bytes se pintaban como tres celdas en vez de una.
+  //
+  // Aqui solo se decodifica el PROTOCOLO (una secuencia multibyte ocupa una
+  // celda). Que glifo usar para cada caracter no es cosa del terminal: eso lo
+  // decide la fuente del panel.
+  //
+  // El problema: los bytes 0x80-0xBF son a la vez continuacion UTF-8 y glifos
+  // CP437 (0xDB = bloque, 0xB3 = barra vertical), y 0xDB 0xB3 es incluso una
+  // secuencia UTF-8 valida. No se puede adivinar: se decodifica UTF-8 solo si
+  // el usuario lo activa desde el panel (set_utf8).
+  if (b >= 0x80 && !utf8_activo_) {
+    escribir(b);
+    ultimo_fue_cr_ = false;
+    return;
+  }
+
+  if (b >= 0x80) {
+    // Si habia una cabecera pendiente y este byte no es continuacion, la
+    // cabecera era en realidad un byte CP437 suelto: se pinta y se sigue.
+    if (utf8_necesarios_ > 0 && (b & 0xC0) != 0x80) {
+      utf8_necesarios_ = 0;
+      escribir(utf8_byte_);
+    }
+
+    if (utf8_necesarios_ == 0) {
+      if (b >= 0xE0 && b <= 0xEF) {
+        // Cabecera de 3 bytes (U+0800-U+FFFF).
+        utf8_necesarios_ = 2;
+        utf8_cp_ = (uint32_t)(b & 0x0F);
+        utf8_byte_ = b;
+        return;
+      }
+      if (b >= 0xC2 && b <= 0xDF) {
+        // Cabecera de 2 bytes (U+0080-U+07FF).
+        utf8_necesarios_ = 1;
+        utf8_cp_ = (uint32_t)(b & 0x1F);
+        utf8_byte_ = b;
+        return;
+      }
+      // Byte alto que no inicia una secuencia valida.
+      escribir(b);
+      ultimo_fue_cr_ = false;
+      return;
+    }
+
+    // Continuacion de una secuencia en curso.
+    utf8_cp_ = (utf8_cp_ << 6) | (uint32_t)(b & 0x3F);
+    if (--utf8_necesarios_ == 0) {
+      escribir(unicode_a_cp437(utf8_cp_), utf8_cp_);
+      utf8_cp_ = 0;
+      ultimo_fue_cr_ = false;
+    }
+    return;
+  }
+
+  // Byte ASCII normal: si habia una cabecera pendiente, era CP437 suelto.
+  if (utf8_necesarios_ > 0) {
+    utf8_necesarios_ = 0;
+    escribir(utf8_byte_);
+  }
+
+  // 0x20-0x7F.
   escribir(b);
   ultimo_fue_cr_ = false;
 }
 
-void TerminalState::escribir(uint8_t ch) {
+// Traduce un punto de codigo Unicode a la celda CP437 que lo representa.
+//
+// CP437 cubre latin-1, la mitad de las cajas y los bloques, asi que el texto
+// normal y los marcos pasan intactos. Un caracter que CP437 no puede
+// representar se sustituye por '?', de modo que siga ocupando UNA celda.
+uint8_t TerminalState::unicode_a_cp437(uint32_t cp) {
+  if (cp < 0x80) return (uint8_t)cp;
+
+  // Tabla de los 128 glifos altos de CP437 en orden (Unicode).
+  static const uint16_t kCp437Altos[128] = {
+      0x00C7, 0x00FC, 0x00E9, 0x00E2, 0x00E4, 0x00E0, 0x00E5, 0x00E7,
+      0x00EA, 0x00EB, 0x00E8, 0x00EF, 0x00EE, 0x00EC, 0x00C4, 0x00C5,
+      0x00C9, 0x00E6, 0x00C6, 0x00F4, 0x00F6, 0x00F2, 0x00FB, 0x00F9,
+      0x00FF, 0x00D6, 0x00DC, 0x00A2, 0x00A3, 0x00A5, 0x20A7, 0x0192,
+      0x00E1, 0x00ED, 0x00F3, 0x00FA, 0x00F1, 0x00D1, 0x00AA, 0x00BA,
+      0x00BF, 0x2310, 0x00AC, 0x00BD, 0x00BC, 0x00A1, 0x00AB, 0x00BB,
+      0x2591, 0x2592, 0x2593, 0x2502, 0x2524, 0x2561, 0x2562, 0x2556,
+      0x2555, 0x2563, 0x2551, 0x2557, 0x255D, 0x255C, 0x255B, 0x2510,
+      0x2514, 0x2534, 0x252C, 0x251C, 0x2500, 0x253C, 0x255E, 0x255F,
+      0x255A, 0x2554, 0x2569, 0x2566, 0x2560, 0x2550, 0x256C, 0x2567,
+      0x2568, 0x2564, 0x2565, 0x2559, 0x2558, 0x2552, 0x2553, 0x256B,
+      0x256A, 0x2518, 0x250C, 0x2588, 0x2584, 0x258C, 0x2590, 0x2580,
+      0x03B1, 0x00DF, 0x0393, 0x03C0, 0x03A3, 0x03C3, 0x00B5, 0x03C4,
+      0x03A6, 0x0398, 0x03A9, 0x03B4, 0x221E, 0x03C6, 0x03B5, 0x2229,
+      0x2261, 0x00B1, 0x2265, 0x2264, 0x2320, 0x2321, 0x00F7, 0x2248,
+      0x00B0, 0x2219, 0x00B7, 0x221A, 0x207F, 0x00B2, 0x25A0, 0x00A0};
+
+  for (int i = 0; i < 128; i++) {
+    if (kCp437Altos[i] == cp) return (uint8_t)(0x80 + i);
+  }
+
+  // Cajas y bloques que UTF-8 trae con otro punto de codigo.
+  switch (cp) {
+    case 0x2022: return 0x07;  // vineta -> punto
+    case 0x2013: case 0x2014: return '-';  // guiones largos
+    case 0x2018: case 0x2019: return '\'';
+    case 0x201C: case 0x201D: return '"';
+    case 0x2026: return '.';   // puntos suspensivos
+    case 0x00A0: return ' ';   // espacio duro
+    default: break;
+  }
+
+  // Caracter no representable: un solo '?' (nunca varios por caracter).
+  return '?';
+}
+
+void TerminalState::escribir(uint8_t ch) { escribir(ch, 0); }
+
+void TerminalState::escribir(uint8_t ch, uint32_t cp) {
   Celda& c = rejilla_[(size_t)fila_ * COLS + col_];
   c.ch = ch;
+  c.cp = cp;
   c.at = at_;
   sucio_ = true;
   if (++col_ >= COLS) {
@@ -345,6 +460,20 @@ const uint32_t kPaleta[16] = {
 };
 }  // namespace
 
+const uint8_t* TerminalState::glifo(const Celda& c) {
+  // Si la celda vino de UTF-8, se busca su punto de codigo en la fuente
+  // Unicode. Si no esta (rango no incluido), se cae a CP437 con el byte que
+  // se guardo; si tampoco hay nada, un '?' de una sola celda.
+  if (c.cp != 0) {
+    for (int i = 0; i < font_unicode::kNumIndices; i++) {
+      if (font_unicode::kIndices[i].cp == c.cp) {
+        return &font_unicode::kGlifos[font_unicode::kIndices[i].offset];
+      }
+    }
+  }
+  return &kFontCp437[(size_t)c.ch * 16];
+}
+
 void TerminalState::a_imagen(std::vector<uint32_t>* px, int* w, int* h) const {
   const int ancho = COLS * 8;
   const int alto = ROWS * 16;
@@ -364,7 +493,7 @@ void TerminalState::a_imagen(std::vector<uint32_t>* px, int* w, int* h) const {
       }
       const uint32_t col_fg = kPaleta[fg];
       const uint32_t col_bg = kPaleta[bg];
-      const uint8_t* g = &kFontCp437[(size_t)cel.ch * 16];
+      const uint8_t* g = glifo(cel);
       uint32_t* fila = px->data() + (size_t)f * 16 * ancho + (size_t)c * 8;
       for (int y = 0; y < 16; y++) {
         const uint8_t bits = g[y];

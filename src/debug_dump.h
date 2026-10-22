@@ -5,6 +5,7 @@
 
 class Bus;
 class Video;
+class Cpu6502;
 
 // Utilidades de depuración: convierten el estado del emulador en imágenes,
 // texto o JSON para poder inspeccionarlo desde fuera (un navegador, un script o
@@ -45,7 +46,12 @@ bool dump_video_json_mem(Video& video, std::string& out);
 // --- Estado ----------------------------------------------------------------
 
 bool dump_state_txt_mem(Bus& bus, std::string& out);
+// Igual, pero incluye el estado de la CPU (PC, registros y ciclos). Es lo que
+// permite distinguir un programa que calcula de uno colgado: si el PC no se
+// mueve entre dos lecturas y no esta en un bucle de espera, esta atascado.
+bool dump_state_txt_mem(Bus& bus, const Cpu6502* cpu, std::string& out);
 bool dump_state_txt(const std::string& path, Bus& bus);
+bool dump_state_txt(const std::string& path, Bus& bus, const Cpu6502* cpu);
 
 // --- Memoria ---------------------------------------------------------------
 

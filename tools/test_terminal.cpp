@@ -131,7 +131,26 @@ int main(int argc, char** argv) {
     comprobar_bool("CP437 0xDA conservado", t.celda(0, 2).ch == 0xDA);
   }
 
-  // 8. Secuencia desconocida: no debe ensuciar la pantalla.
+  // 8. UTF-8: una secuencia multibyte ocupa UNA celda (no una por byte).
+  {
+    TerminalState t;
+    t.set_utf8(true);
+    // ♞ (U+265E) = E2 99 9E, seguido de 'X'.
+    enviar(t, std::string("\xE2\x99\x9E" "X"));
+    comprobar_bool("UTF-8: ficha es una celda", t.celda(0, 1).ch == 'X');
+    comprobar_bool("UTF-8: punto de codigo guardado", t.celda(0, 0).cp == 0x265E);
+    // Los acentos UTF-8 se traducen a su byte CP437.
+    TerminalState t2;
+    t2.set_utf8(true);
+    enviar(t2, std::string("\xC3\xA1"));  // á
+    comprobar_bool("UTF-8: acento a CP437", t2.celda(0, 0).ch == 0xA0);
+    // Y con UTF-8 apagado, los mismos bytes son CP437 crudo.
+    TerminalState t3;
+    enviar(t3, std::string("\xE2\x99\x9E"));
+    comprobar_bool("UTF-8 apagado: bytes CP437", t3.celda(0, 0).ch == 0xE2);
+  }
+
+  // 9. Secuencia desconocida: no debe ensuciar la pantalla.
   {
     TerminalState t;
     enviar(t, "\x1b[99;99zHola");

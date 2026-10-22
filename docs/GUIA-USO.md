@@ -973,15 +973,35 @@ glifos de caja.
 Lo que no interpreta (no lo usa este firmware): regiones de scroll, ratón,
 consultas de estado del cursor y ANSI de 24 bits (se aproxima a 16 colores).
 
-##### CP437: los bloques y marcos
+##### CP437 y Unicode: los bloques y marcos
 
 Los bytes `0x80`-`0xFF` **no se descartan**: se dibujan con la tabla **CP437**,
 la misma que usa la consola de DOS y PuTTY en modo DOS. Por eso se ven los
 marcos `│ ─ ┌ ┐ └ ┘ ═ ║`, los bloques `█ ▓ ▒ ░` y los acentos `á é í ñ`.
 
-La fuente está en `src/terminal/font_cp437.h` (256 glifos de 8x16, generada por
-`tools/gen_font_cp437.py`). **No hay UTF-8**: el UART mueve bytes sueltos y este
-sistema usa CP437, como se ha comprobado en los binarios reales (Tetris, editor).
+Además, el terminal **entiende UTF-8**: si un programa manda texto con
+secuencias multibyte (por ejemplo `E2 99 9E`, la ficha `♞`), el panel lo
+dibuja como **una sola celda** en lugar de tres. El emulador solo decodifica el
+protocolo; los glifos salen de una segunda fuente embebida
+(`src/terminal/font_unicode.h`, generada por `tools/gen_font_unicode.py`) que
+cubre estos rangos:
+
+| Rango | Qué incluye |
+|---|---|
+| `U+00A0–U+00FF` | Acentos y símbolos latinos |
+| `U+2190–U+2195` | Flechas |
+| `U+2500–U+257F` | Marcos de caja (los de las interfaces de texto) |
+| `U+2580–U+259F` | Bloques y tramados |
+| `U+25A0–U+25CF` | Formas geométricas |
+| `U+2654–U+265F` | Fichas de ajedrez |
+
+Un carácter fuera de esos rangos se dibuja como `?` **en una sola celda**, así
+que la rejilla 80x24 nunca se desalinea. La fuente base está en
+`src/terminal/font_cp437.h` (256 glifos de 8x16, generada por
+`tools/gen_font_cp437.py`).
+
+Por el cable **no cambia nada**: el UART sigue moviendo los mismos bytes. Esta
+decodificación es solo para el panel de la ventana y `/console.png`.
 
 ##### Geometría y scrollback
 

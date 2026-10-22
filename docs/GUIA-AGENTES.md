@@ -270,13 +270,15 @@ si los bits 3-7 no están en `entrada`, el programa no llamó a `joy_init()`.
 | Esperar salida antes de cargar | el monitor ya escribió su banner al arrancar | el banner se pierde si conectas tarde; usa `/console.txt` para el estado actual |
 | Capturar demasiado pronto | el programa aún está cargando | esperar ~2 s tras `load` y ~3 s tras `r` |
 | Creer que el ANSI no llega | el texto sí llega; el que interpreta es el host | este emulador **sí** interpreta ANSI (CUP, ED, EL, SGR) y CP437 |
-| Buscar Unicode | no existe en esta plataforma | el cable mueve bytes sueltos; usa CP437 |
+| Buscar Unicode | el cable mueve bytes sueltos | el panel lo dibuja, pero no lo cuentes para el programa |
 
 ---
 
 ## 6. Qué NO hace el emulador
 
-- No interpreta UTF-8: **CP437** para bytes ≥ 0x80.
+- **No** valida la codificación: el UART mueve bytes sueltos, como el hardware.
+  El panel **entiende** UTF-8 para poder dibujar símbolos modernos (fichas de
+  ajedrez, flechas) en **una sola celda**, pero eso es solo de presentación.
 - La consola es de **solo lectura**: no manda nada al programa ni acepta teclado.
   Para escribir en el programa usa el UART (socket 4000) o el joystick.
 - El ANSI cubierto es el habitual de consola: no hay regiones de scroll,
@@ -288,10 +290,12 @@ si los bits 3-7 no están en `entrada`, el programa no llamó a `joy_init()`.
 
 ## 7. Formatos de la consola
 
-- `/console.txt`: 24 líneas de 80 caracteres + `\n` cada una. Los bytes ≥ 0x80
-  salen **tal cual** (son CP437), no como UTF-8.
+- `/console.txt`: 24 líneas de 80 caracteres + `\n` cada una. Es **texto
+  CP437 crudo**: los bytes ≥ 0x80 salen tal cual, sin convertir a UTF-8. Un
+  carácter UTF-8 que mandara el programa ya llega unido en una sola celda.
 - `/console.png`: 640×384 píxeles (celda 8×16), colores ANSI de 16 colores,
-  fondo negro. Mismo resultado que ver la ventana.
+  fondo negro. Mismo resultado que ver la ventana, con la fuente Unicode
+  embebida para los rangos que CP437 no cubre.
 
 Para comparar con lo que ve un humano por PuTTY: PuTTY debe estar en modo DOS
 (CP437). Ver [`PUTTY-SETUP.md`](PUTTY-SETUP.md).

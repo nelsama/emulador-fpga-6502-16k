@@ -723,7 +723,7 @@ void DebugServer::build_response(Conn& /*c*/, const std::string& head) {
     }
 
   } else if (path == "/state.txt") {
-    debug_dump::dump_state_txt_mem(*bus_, resp_.body);
+    debug_dump::dump_state_txt_mem(*bus_, cpu_, resp_.body);
 
   } else if (path == "/ram.bin") {
     // Volcado de los 16 KB de RAM (formato binario: pantalla cruda).

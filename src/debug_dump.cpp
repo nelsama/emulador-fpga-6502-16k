@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "bus.h"
+#include "cpu_6502.h"
 #include "gpio_uart.h"
 #include "ram_rom.h"
 #include "sid.h"
@@ -281,8 +282,30 @@ bool dump_video_json_mem(Video& video, std::string& out) {
 // --- Estado ----------------------------------------------------------------
 
 bool dump_state_txt_mem(Bus& bus, std::string& out) {
+  return dump_state_txt_mem(bus, nullptr, out);
+}
+
+bool dump_state_txt_mem(Bus& bus, const Cpu6502* cpu, std::string& out) {
   out.clear();
   out += "=== ESTADO DEL EMULADOR ===\n";
+
+  // CPU: lo primero, que es lo que se mira al depurar un cuelgue. El PC quieto
+  // entre dos lecturas significa que el programa no avanza.
+  if (cpu) {
+    out += "CPU:\n";
+    appendf(out, "  PC=%04X  SP=%02X  A=%02X  X=%02X  Y=%02X  SR=%02X\n",
+            cpu->pc(), cpu->sp(), cpu->a(), cpu->x(), cpu->y(), cpu->sr());
+    // Desglose del registro de estado, para no tener que descifrar el byte.
+    const uint8_t sr = cpu->sr();
+    appendf(out, "  flags: %c%c%c%c%c%c%c%c  (N V - B D I Z C)\n",
+            (sr & 0x80) ? 'N' : '-', (sr & 0x40) ? 'V' : '-',
+            (sr & 0x20) ? 'U' : '-', (sr & 0x10) ? 'B' : '-',
+            (sr & 0x08) ? 'D' : '-', (sr & 0x04) ? 'I' : '-',
+            (sr & 0x02) ? 'Z' : '-', (sr & 0x01) ? 'C' : '-');
+    const unsigned long long ciclos = cpu->ciclos_totales();
+    appendf(out, "  ciclos: %llu  (%.2f s a 3.375 MHz)\n", ciclos,
+            (double)ciclos / 3375000.0);
+  }
 
   if (Gpio* g = bus.gpio()) {
     // leds() ya devuelve los 6 LEDs con 1 = encendido (activo en bajo).
@@ -411,6 +434,12 @@ bool dump_state_txt_mem(Bus& bus, std::string& out) {
 bool dump_state_txt(const std::string& path, Bus& bus) {
   std::string s;
   dump_state_txt_mem(bus, s);
+  return write_file(path, s);
+}
+
+bool dump_state_txt(const std::string& path, Bus& bus, const Cpu6502* cpu) {
+  std::string s;
+  dump_state_txt_mem(bus, cpu, s);
   return write_file(path, s);
 }
 

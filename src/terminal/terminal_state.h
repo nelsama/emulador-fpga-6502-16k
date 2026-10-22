@@ -42,6 +42,10 @@ public:
 
   struct Celda {
     uint8_t ch = 0x20;   // byte CP437 (0x20 = espacio)
+    // Punto de codigo Unicode cuando el texto llego en UTF-8. 0 = sin dato y
+    // se usa `ch` con la tabla CP437. Asi el dibujo no depende de la
+    // aplicacion: solo de lo que el programa escribio en el cable.
+    uint32_t cp = 0;
     Atributos at;
   };
 
@@ -76,8 +80,41 @@ public:
   // los colores ANSI. Lo usa /console.png para dar una captura de la consola.
   void a_imagen(std::vector<uint32_t>* px, int* w, int* h) const;
 
+  // Glifo de una celda: 16 bytes, una fila por byte, bit 7 = pixel izquierdo.
+  // Prefiere la fuente Unicode si la celda trae punto de codigo; si no, CP437.
+  // Lo usan tanto a_imagen() como el panel de la ventana.
+  static const uint8_t* glifo(const Celda& c);
+
+  // --- Codificacion de entrada ---
+  //
+  // Los bytes no dicen si son CP437 o UTF-8: 0xDB 0xB3 es "█│" en CP437 y
+  // tambien una secuencia UTF-8 valida. No se puede adivinar, asi que lo elige
+  // el usuario desde el panel y se aplica en caliente.
+  //
+  // Con UTF-8 desactivado (por defecto) todo byte alto se pinta como CP437,
+  // que es lo que hace el sistema clasico. Al activarlo, las secuencias UTF-8
+  // ocupan una sola celda y se busca el glifo en font_unicode.
+  void set_utf8(bool on) {
+    utf8_activo_ = on;
+    utf8_necesarios_ = 0;
+    utf8_cp_ = 0;
+    sucio_ = true;
+  }
+  bool utf8_activo() const { return utf8_activo_; }
+
 private:
   void escribir(uint8_t ch);
+  // Igual, pero guarda ademas el punto de codigo Unicode de origen.
+  void escribir(uint8_t ch, uint32_t cp);
+  // Traduce un punto de codigo Unicode a una celda CP437 (una sola).
+  static uint8_t unicode_a_cp437(uint32_t cp);
+
+  // Decodificador UTF-8: los programas nuevos mandan texto en UTF-8 y el panel
+  // dibuja CP437, asi que una secuencia multibyte debe ocupar UNA celda.
+  int utf8_necesarios_ = 0;  // bytes de continuacion que faltan
+  uint32_t utf8_cp_ = 0;     // punto de codigo en construccion
+  uint8_t utf8_byte_ = 0;    // byte original de la cabecera (si falla, CP437)
+  bool utf8_activo_ = false; // CP437 por defecto; el panel lo conmuta
   void nueva_linea();
   void scroll();
   void mover(int dfila, int dcol);

@@ -68,7 +68,11 @@ public:
   // Estado del terminal (80x24) que refleja la salida del UART. Se copia una
   // vez por fotograma: Main lo actualiza desde Uart::terminal().
   void set_terminal(const TerminalState& term) {
+    // La codificacion la elige el usuario en el panel; el estado que llega de
+    // main.cpp no lo trae, asi que se conserva el que tenga la ventana.
+    const bool u8 = term_.utf8_activo();
     term_ = term;
+    term_.set_utf8(u8);
     term_sucio_ = true;  // el estado puede traer sucio=false aunque cambie
   }
   bool has_terminal() const { return terminal_; }

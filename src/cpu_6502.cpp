@@ -30,6 +30,7 @@ void Cpu6502::reset() {
   sp_ = 0xFD;
   sr_ = 0x24; // bit5 = 1 (unused), bit2 = 1 (I)
   a_ = x_ = y_ = 0;
+  ciclos_totales_ = 0;
 }
 
 void Cpu6502::irq() {
@@ -56,6 +57,7 @@ void Cpu6502::step() {
   if (bus_.irq_asserted() && !(sr_ & 0x04)) {
     irq();
     last_cycles_ = 7;
+    ciclos_totales_ += (uint64_t)last_cycles_;
     return;
   }
 
@@ -310,4 +312,8 @@ void Cpu6502::step() {
       // como NOP para no romper el arranque; en producción hay que cubrirlas.
       break;
   }
+
+  // Los ciclos de esta instrucción. Se suma aqui (y no al entrar) para que el
+  // total sea exacto desde la primera instrucción.
+  ciclos_totales_ += (uint64_t)last_cycles_;
 }

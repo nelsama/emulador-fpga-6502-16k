@@ -12,7 +12,6 @@
 #endif
 
 #include "video/font_c64.h"
-#include "terminal/font_cp437.h"
 
 EmuWindow::~EmuWindow() {
 #ifdef HAVE_SDL2
@@ -118,22 +117,6 @@ void draw_glyph(SDL_Renderer* r, int x, int y, char c, int f) {
   if (idx < 0 || idx >= 96) return;
   for (int row = 0; row < 8; row++) {
     const uint8_t bits = kFontC64[idx * 8 + row];
-    if (!bits) continue;
-    for (int col = 0; col < 8; col++) {
-      if (!(bits & (0x80 >> col))) continue;
-      SDL_Rect px{x + col * f, y + row * f, f, f};
-      SDL_RenderFillRect(r, &px);
-    }
-  }
-}
-
-// Glifo CP437 (8x16) con fondo y color de tinta dados.
-void draw_glyph_cp437(SDL_Renderer* r, int x, int y, int f, uint8_t ch,
-                      SDL_Color tinta) {
-  const uint8_t* g = &kFontCp437[(size_t)ch * 16];
-  SDL_SetRenderDrawColor(r, tinta.r, tinta.g, tinta.b, 255);
-  for (int row = 0; row < 16; row++) {
-    const uint8_t bits = g[row];
     if (!bits) continue;
     for (int col = 0; col < 8; col++) {
       if (!(bits & (0x80 >> col))) continue;
@@ -476,6 +459,13 @@ void EmuWindow::clic_en(int x, int y) {
       } else if (z.accion == "borrar_confirmar") {
         fila_borrar_ = -1;
         if (on_sd_accion) on_sd_accion("delete", z.arg);
+      } else if (z.accion == "codificacion") {
+        // Conmuta CP437 <-> UTF-8 en caliente. Se repinta la consola entera
+        // porque el cambio afecta a todas las celdas ya dibujadas.
+        term_.set_utf8(!term_.utf8_activo());
+        term_sucio_ = true;
+        std::printf("Terminal: %s\n", term_.utf8_activo() ? "UTF-8" : "CP437");
+        std::fflush(stdout);
       } else if (z.accion == "rename_archivo") {
         dialogo_.activo = true;
         dialogo_.titulo = "Nuevo nombre para " + z.arg;
@@ -554,7 +544,9 @@ void EmuWindow::dibujar_terminal(void* renderer, const void* caja) {
         const uint32_t col_fg = ((uint32_t)cf.r << 16) | ((uint32_t)cf.g << 8) | cf.b;
         const uint32_t col_bg = ((uint32_t)cb.r << 16) | ((uint32_t)cb.g << 8) | cb.b;
 
-        const uint8_t* g = &kFontCp437[(size_t)celda.ch * 16];
+        // La celda sabe que glifo le toca (Unicode o CP437); el panel no
+        // necesita saber de que programa viene.
+        const uint8_t* g = TerminalState::glifo(celda);
         uint32_t* dst = term_px_.data() + (size_t)fila * 16 * ancho + (size_t)col * 8;
         for (int y = 0; y < 16; y++) {
           const uint8_t bits = g[y];
@@ -1064,7 +1056,7 @@ void EmuWindow::present(const uint32_t* rgb, uint8_t leds) {
     const int alto_sd = dibujar_modulo_sd(ren, PANEL_MARGEN, alto_estado);
     const int y_consola = alto_estado + alto_sd;
 
-    // --- Módulo 3: terminal del UART (80x24, ANSI + CP437) ---
+    // --- Módulo 3: terminal del UART (80x24, ANSI) ---
     if (terminal_) {
       const int term_x = PANEL_MARGEN;
       const int term_w = panel_w_ - 2 * PANEL_MARGEN;
@@ -1077,6 +1069,30 @@ void EmuWindow::present(const uint32_t* rgb, uint8_t leds) {
       SDL_RenderDrawRect(ren, &term);
 
       dibujar_terminal(ren, &term);
+
+      // Selector de codificacion, en la cabecera del modulo (fuera de la
+      // rejilla: el terminal se repinta entero y taparia cualquier cosa que se
+      // dibuje encima).
+      //
+      // CP437 y UTF-8 son indistinguibles byte a byte (0xDB 0xB3 es "█│" en
+      // CP437 y tambien una secuencia UTF-8 valida), asi que no se puede
+      // adivinar: lo elige el usuario y se aplica en caliente.
+      {
+        const bool u8 = term_.utf8_activo();
+        const char* etiqueta = u8 ? "UTF-8" : "CP437";
+
+        const int ancho = 5 * TERM_CW + 10;
+        SDL_Rect b{term.x + term.w - ancho - 4, term.y + 1, ancho, 13};
+        SDL_SetRenderDrawColor(ren, 30, 34, 44, 255);
+        SDL_RenderFillRect(ren, &b);
+        SDL_SetRenderDrawColor(ren, u8 ? 90 : 70, u8 ? 160 : 90, u8 ? 120 : 110, 255);
+        SDL_RenderDrawRect(ren, &b);
+        SDL_SetRenderDrawColor(ren, u8 ? 150 : 150, u8 ? 220 : 170, u8 ? 170 : 200, 255);
+        for (int i = 0; i < 5; i++) {
+          draw_glyph(ren, b.x + 5 + i * TERM_CW, b.y + 2, etiqueta[i], TERM_SCALE);
+        }
+        zonas_.push_back(Zona{b.x, b.y, b.w, b.h, "codificacion", ""});
+      }
     }
   }
 
