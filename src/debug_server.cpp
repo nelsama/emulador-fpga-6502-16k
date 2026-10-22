@@ -556,6 +556,86 @@ void DebugServer::build_response(Conn& /*c*/, const std::string& head) {
       resp_.body = "sin UART" + NL;
     }
 
+  } else if (path == "/uart") {
+    // Inyecta texto en el UART como si llegara de PuTTY.
+    //
+    //   GET  /uart?data=ls%0D
+    //   POST /uart?data=ls%0D           (o GET con ?data=)
+    //   POST /uart                       cuerpo = bytes crudos
+    //   GET  /uart?cmd=ls               añade el \r solo
+    //
+    // `data` y `cmd` admiten escapes de URL (%0D, %0A, %20...); el cuerpo del
+    // POST se toma tal cual, byte a byte (útil para el editor de la ROM o
+    // para mandar binario). Se responde de inmediato, SIN esperar la salida
+    // del monitor: para leer la respuesta, consulta /console.txt.
+    if (!bus_->uart()) {
+      resp_.status = "503 Service Unavailable";
+      resp_.body = "sin UART" + NL;
+    } else {
+      // Decodifica %XX y '+' (como un formulario).
+      auto url_decode = [](const std::string& s) {
+        std::string out;
+        out.reserve(s.size());
+        for (size_t i = 0; i < s.size(); i++) {
+          if (s[i] == '%' && i + 2 < s.size()) {
+            auto hex = [](char c) -> int {
+              if (c >= '0' && c <= '9') return c - '0';
+              if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+              if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+              return -1;
+            };
+            const int hi = hex(s[i + 1]), lo = hex(s[i + 2]);
+            if (hi >= 0 && lo >= 0) {
+              out.push_back((char)((hi << 4) | lo));
+              i += 2;
+              continue;
+            }
+          }
+          out.push_back(s[i] == '+' ? ' ' : s[i]);
+        }
+        return out;
+      };
+
+      // Valor de un parametro de la query (?clave=...).
+      auto param = [&](const char* clave) -> std::string {
+        const std::string k = std::string(clave) + "=";
+        const size_t p = query.find(k);
+        if (p == std::string::npos) return std::string();
+        const size_t ini = p + k.size();
+        const size_t fin = query.find('&', ini);
+        return query.substr(ini, fin == std::string::npos ? std::string::npos
+                                                         : fin - ini);
+      };
+
+      std::string texto;
+      bool con_retorno = false;
+      const std::string data = param("data");
+      const std::string cmd = param("cmd");
+      if (!data.empty()) {
+        texto = url_decode(data);
+      } else if (!cmd.empty()) {
+        texto = url_decode(cmd);
+        con_retorno = true;  // atajo: equivale a escribir y pulsar Enter
+      } else if (!cuerpo_peticion_.empty()) {
+        texto.assign(cuerpo_peticion_.begin(), cuerpo_peticion_.end());
+      }
+
+      if (texto.empty()) {
+        resp_.status = "400 Bad Request";
+        resp_.body =
+            "uso: GET/POST /uart?data=TEXTO (%0D para Enter), ?cmd=TEXTO "
+            "(anade Enter) o POST con el cuerpo = bytes crudos" + NL;
+      } else {
+        Uart* u = bus_->uart();
+        for (char c : texto) u->enqueue_rx((uint8_t)c);
+        if (con_retorno) u->enqueue_rx('\r');
+        resp_.body = "OK: " + std::to_string(texto.size() + (con_retorno ? 1 : 0)) +
+                     " bytes al UART. La respuesta sale en /console.txt" + NL;
+        std::printf("UART: %zu bytes inyectados por HTTP\n",
+                    texto.size() + (con_retorno ? 1 : 0));
+      }
+    }
+
   } else if (path == "/console.txt") {
     // Pantalla de la consola (80x24) tal como la interpreta el terminal del
     // panel: útil para que un agente compruebe qué está mostrando un programa

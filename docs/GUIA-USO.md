@@ -194,6 +194,9 @@ pantalla sin intervención humana**.
 | `/sdcard/ls` | texto | Archivos de la SD y espacio libre |
 | `POST /sdcard/write?name=X.BIN` | texto | Añade un archivo (cuerpo = datos binarios) |
 | `/sdcard/delete?name=X.BIN` | texto | Borra un archivo |
+| `/sdcard/rename?name=X.BIN&to=Y.BIN` | texto | Renombra un archivo |
+| `/sdcard/remount` | texto | Fuerza el re-montaje del monitor (`sd` por el UART) |
+| `/uart?cmd=TEXTO` | texto | Escribe en el UART como PuTTY y añade Enter. También `?data=` o POST |
 | `/vram.txt` | texto | Tilemap, atributos y OAM en hexadecimal + vista ASCII 40×30 |
 | `/vram.json` | JSON | Lo mismo que `/vram.txt` pero estructurado, para procesarlo con código |
 | `/state.txt` | texto | CPU/UART, LEDs, Core de Vídeo y registros del SID |
@@ -235,11 +238,36 @@ curl "http://localhost:8080/sdcard/rename?name=JUEGO.BIN&to=JUEGO2.BIN"
 ```
 
 > **El monitor cachea el directorio**: tras inyectar por HTTP, los archivos
-> nuevos no aparecen en `LS` hasta que se re-monta la SD. Manda `sd` + Enter
-> por el UART (PuTTY o `curl` al `/uart`), o pulsa **`Remontar`** en el módulo
-> SD de la ventana. (La ventana **sí** re-monta sola cuando añades, borras o
-> renombras desde su GUI.) El archivo **sí** está escrito y en `/sdcard/ls`
-> aparece siempre.
+> nuevos no aparecen en `LS` hasta que se re-monta la SD. La ventana **sí**
+> re-monta sola cuando añades, borras o renombras desde su GUI, y estos
+> endpoints también lo hacen solos (o fuerza el re-montaje con
+> `/sdcard/remount`). El archivo **sí** está escrito y en `/sdcard/ls` aparece
+> siempre.
+
+Escribir en el UART (como si teclees en PuTTY, sin PuTTY):
+
+```bash
+curl "http://localhost:8080/uart?cmd=ls"            # envía "ls" + Enter
+curl "http://localhost:8080/uart?data=ls%0D"        # lo mismo, con %0D = Enter
+curl "http://localhost:8080/uart?cmd=sd%3A"         # %3A = ':'
+printf 'help\r' | curl --data-binary @- http://localhost:8080/uart   # bytes crudos
+curl "http://localhost:8080/console.txt"            # ver la respuesta
+```
+
+Detalles del endpoint `/uart`:
+
+| | |
+|---|---|
+| Método | **GET** o **POST** (da igual) |
+| `?data=TEXTO` | Envía el texto tal cual. Los `%XX` se decodifican y `+` es un espacio |
+| `?cmd=TEXTO` | Igual, pero **añade el Enter (`\r`)** al final |
+| Cuerpo del POST | Si no hay `data` ni `cmd`, se envían los bytes del cuerpo **tal cual**, sin decodificar |
+| Respuesta | Solo confirma cuántos bytes se enviaron; **no** espera al monitor |
+| Salida del monitor | Se lee aparte con `/console.txt` (o con PuTTY) |
+
+`\r` (`%0D`) es el Enter del monitor; `\n` (`%0A`) solo hace saltar de línea
+sin ejecutar el comando. Hay un tope de 64 KiB en la FIFO de entrada: si se
+llena, los bytes sobrantes se pierden (overrun, igual que en el hardware).
 
 Leer el estado del sistema:
 

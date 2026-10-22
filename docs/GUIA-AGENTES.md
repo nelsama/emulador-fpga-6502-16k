@@ -176,6 +176,7 @@ debería cerrar con `shutdown(SHUT_WR)`.
 | `/sdcard/delete?name=X.BIN` | Borra un archivo de la imagen. Remonta solo |
 | `/sdcard/rename?name=X.BIN&to=Y.BIN` | Renombra un archivo (conserva los datos). Remonta solo |
 | `/sdcard/remount` | Fuerza el re-montaje del monitor (`sd` por el UART) |
+| `/uart?cmd=TEXTO` | Escribe en el UART como PuTTY (añade Enter). También `?data=` o POST |
 | `/screen.png` | Captura del vídeo del FPGA (320×240), `?scale=2..4` |
 | `/vram.txt` | Tilemap, atributos y OAM en hexadecimal + vista ASCII 40×30 |
 | `/vram.json` | Lo mismo, estructurado |
@@ -197,6 +198,10 @@ curl "http://localhost:8080/sdcard/delete?name=JUEGO2.BIN"
 
 # Forzar el re-montaje (tras tocar la imagen por fuera):
 curl "http://localhost:8080/sdcard/remount"
+
+# Teclear en el monitor sin PuTTY (con ?cmd= se añade el Enter):
+curl "http://localhost:8080/uart?cmd=help"
+curl "http://localhost:8080/console.txt"    # leer la respuesta
 ```
 
 `write`, `delete` y `rename` **remontan solos** el directorio del monitor para
@@ -211,6 +216,19 @@ seguidas y prefieres remontar una sola vez al final con `/sdcard/remount`.
 > **El emulador debe ejecutarse FUERA de un sandbox**: abre ventana (SDL2) y
 > escucha en red (4000/8080). Dentro de un sandbox no funciona; lánzalo en el
 > shell normal del usuario.
+
+Sobre `/uart`: es **asíncrono**. La respuesta trae solo «OK: N bytes al UART»;
+no espera a que el monitor conteste. Para leer el resultado, haz una pausa
+de un par de décimas y consulta `/console.txt`:
+
+```bash
+curl -s "http://localhost:8080/uart?cmd=ls" >/dev/null
+sleep 0.5
+curl -s "http://localhost:8080/console.txt" | tail -20
+```
+
+Usa `?cmd=` (añade Enter) casi siempre; `?data=` es para mandar pulsaciones
+sueltas o texto sin ejecutar. El Enter del monitor es `\r` (`%0D`), no `\n`.
 
 `/state.txt` incluye también el **flag de usuario** (`$C004 flag usuario: 0/1`),
 un bit R/W que sobrevive al reset del sistema y sirve para que el software
