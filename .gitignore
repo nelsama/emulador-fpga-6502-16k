@@ -17,6 +17,8 @@ compile_commands.json
 *.wav
 *.ppm
 *.png.bak
+# Salidas que dejan las pruebas de terminal al ejecutar una ROM.
+rom/*_resp.bin
 
 # --- Imagen de la tarjeta SD ---------------------------------------------
 # 16 MB y se regenera con tools/sd_tool.py. Se versiona su contenido
