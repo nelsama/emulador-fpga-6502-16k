@@ -550,7 +550,7 @@ void EmuWindow::dibujar_terminal(void* renderer, const void* caja) {
 
         // La celda sabe que glifo le toca (Unicode o CP437); el panel no
         // necesita saber de que programa viene.
-        const uint8_t* g = TerminalState::glifo(celda);
+        const uint8_t* g = term_.glifo_modo(celda);
         uint32_t* dst = term_px_.data() + (size_t)fila * 16 * ancho + (size_t)col * 8;
         for (int y = 0; y < 16; y++) {
           const uint8_t bits = g[y];

@@ -154,6 +154,16 @@ int main(int argc, char** argv) {
     comprobar_bool("/console.txt igual en CP437 y UTF-8", a.a_texto() == b.a_texto());
   }
 
+  // 7d. El modo debe cambiar el glifo dibujado de una misma celda.
+  {
+    TerminalState t;
+    enviar(t, std::string("\xE2\x99\x9C"));  // U+265C torre negra
+    const auto& cel = t.celda(0, 0);
+    const uint8_t* g_cp = TerminalState::glifo(cel, false);
+    const uint8_t* g_u8 = TerminalState::glifo(cel, true);
+    comprobar_bool("el modo cambia el glifo", g_cp != g_u8);
+  }
+
   // 8. UTF-8: una secuencia multibyte ocupa UNA celda (no una por byte).
   {
     TerminalState t;

@@ -87,7 +87,7 @@ public:
   // Glifo de una celda: 16 bytes, una fila por byte, bit 7 = pixel izquierdo.
   // Prefiere la fuente Unicode si la celda trae punto de codigo; si no, CP437.
   // Lo usan tanto a_imagen() como el panel de la ventana.
-  static const uint8_t* glifo(const Celda& c);
+  static const uint8_t* glifo(const Celda& c, bool utf8);
 
   // --- Codificacion de entrada ---
   //
@@ -105,6 +105,8 @@ public:
     sucio_ = true;
   }
   bool utf8_activo() const { return utf8_activo_; }
+  // Glifo de una celda segun el modo.
+  const uint8_t* glifo_modo(const Celda& c) const { return glifo(c, utf8_activo_); }
 
 private:
   void escribir(uint8_t ch);

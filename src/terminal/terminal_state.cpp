@@ -462,11 +462,12 @@ const uint32_t kPaleta[16] = {
 };
 }  // namespace
 
-const uint8_t* TerminalState::glifo(const Celda& c) {
-  // Si la celda vino de UTF-8, se busca su punto de codigo en la fuente
-  // Unicode. Si no esta (rango no incluido), se cae a CP437 con el byte que
-  // se guardo; si tampoco hay nada, un '?' de una sola celda.
-  if (c.cp != 0) {
+const uint8_t* TerminalState::glifo(const Celda& c, bool utf8) {
+  // El modo decide QUE fuente se usa; no la celda. Decodificar es siempre igual
+  // (una secuencia UTF-8 ocupa una celda y guarda su punto de codigo), pero en
+  // CP437 se dibuja el byte clasico y en UTF-8 el glifo Unicode. Si no se
+  // consultara el modo, el boton no cambiaria nada en pantalla.
+  if (utf8 && c.cp != 0) {
     for (int i = 0; i < font_unicode::kNumIndices; i++) {
       if (font_unicode::kIndices[i].cp == c.cp) {
         return &font_unicode::kGlifos[font_unicode::kIndices[i].offset];
@@ -495,7 +496,7 @@ void TerminalState::a_imagen(std::vector<uint32_t>* px, int* w, int* h) const {
       }
       const uint32_t col_fg = kPaleta[fg];
       const uint32_t col_bg = kPaleta[bg];
-      const uint8_t* g = glifo(cel);
+      const uint8_t* g = glifo_modo(cel);
       uint32_t* fila = px->data() + (size_t)f * 16 * ancho + (size_t)c * 8;
       for (int y = 0; y < 16; y++) {
         const uint8_t bits = g[y];
