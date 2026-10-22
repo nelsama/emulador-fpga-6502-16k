@@ -126,9 +126,32 @@ int main(int argc, char** argv) {
   {
     TerminalState t;
     enviar(t, std::string("\xDB\xB3\xDA"));
-    comprobar_bool("CP437 0xDB conservado", t.celda(0, 0).ch == 0xDB);
-    comprobar_bool("CP437 0xB3 conservado", t.celda(0, 1).ch == 0xB3);
-    comprobar_bool("CP437 0xDA conservado", t.celda(0, 2).ch == 0xDA);
+    // 0xDB 0xB3 0xDA es tambien una secuencia UTF-8 valida (U+06F3), asi que
+    // se decodifica en UNA celda. Lo que importa para /console.txt es que el
+    // byte CP437 guardado sea estable entre modos.
+    comprobar_bool("secuencia ambigua: una celda", t.celda(0, 1).ch == 0x20);
+    comprobar_bool("secuencia ambigua: ch CP437 valido", t.celda(0, 0).ch == 0xDB);
+  }
+
+  // 7b. Bytes CP437 sueltos (no forman UTF-8): se conservan uno a uno.
+  {
+    TerminalState t;
+    // Un byte 0xDA al final se queda esperando continuacion (no se puede saber
+    // si es CP437 o una secuencia cortada); se cierra con un espacio.
+    enviar(t, std::string("\xDB\x41\xDA "));
+    comprobar_bool("CP437 suelto 0xDB", t.celda(0, 0).ch == 0xDB);
+    comprobar_bool("CP437 ASCII", t.celda(0, 1).ch == 'A');
+    comprobar_bool("CP437 suelto 0xDA", t.celda(0, 2).ch == 0xDA);
+  }
+
+  // 7c. a_texto() da el mismo texto en los dos modos (un byte por celda).
+  {
+    TerminalState a, b;
+    b.set_utf8(true);
+    const std::string s = std::string("Hola \xE2\x99\x9C fin");
+    enviar(a, s);
+    enviar(b, s);
+    comprobar_bool("/console.txt igual en CP437 y UTF-8", a.a_texto() == b.a_texto());
   }
 
   // 8. UTF-8: una secuencia multibyte ocupa UNA celda (no una por byte).

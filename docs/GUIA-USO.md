@@ -975,33 +975,33 @@ consultas de estado del cursor y ANSI de 24 bits (se aproxima a 16 colores).
 
 ##### CP437 y Unicode: los bloques y marcos
 
-Los bytes `0x80`-`0xFF` **no se descartan**: se dibujan con la tabla **CP437**,
-la misma que usa la consola de DOS y PuTTY en modo DOS. Por eso se ven los
-marcos `│ ─ ┌ ┐ └ ┘ ═ ║`, los bloques `█ ▓ ▒ ░` y los acentos `á é í ñ`.
+El sistema es CP437 y el panel dibuja una tabla CP437 de 8x16. Los bytes
+`0x80`-`0xFF` se interpretan **siempre** como UTF-8 si forman una secuencia
+válida (`E2 99 9E` = `♞` ocupa **una** celda, no tres), de modo que la rejilla
+ocupa siempre lo mismo y `/console.txt` no cambia según el modo del panel. Si
+los bytes no forman una secuencia válida, se pintan tal cual como CP437.
 
-Además, el terminal **puede entender UTF-8**: si un programa manda texto con
-secuencias multibyte (por ejemplo `E2 99 9E`, la ficha `♞`), el panel lo
-dibuja como **una sola celda** en lugar de tres.
+Lo que cambia con el botón es solo el **dibujo**:
 
 ##### El selector CP437 / UTF-8
 
 Unos bytes no dicen si son CP437 o UTF-8. El mismo `0xDB 0xB3` es `█│` en CP437
-**y** una secuencia UTF-8 válida, así que el terminal no puede adivinarlo.
+**y** una secuencia UTF-8 válida, así que el terminal no puede adivinarlo y
+elige: **si la secuencia es válida, es UTF-8**.
 
-En la cabecera del módulo de consola hay un **botón con la codificación actual**:
+En la cabecera del módulo de consola hay un **botón que cambia solo el dibujo**:
 
 ```
 Tang Nano 9K - 6502 @ 3.375 MHz              [CP437]   ← clic → [UTF-8]
 ```
 
-- **`CP437`** (por defecto): todo byte alto se pinta con la fuente de 256 glifos.
-  Es lo que espera el software clásico (Tetris, editor, monitor).
-- **`UTF-8`**: las secuencias multibyte ocupan una sola celda. Necesario para
-  programas con símbolos modernos (fichas de ajedrez, flechas).
+- **`CP437`** (por defecto): cada celda se pinta con la fuente de 256 glifos.
+  El texto clásico (Tetris, editor, monitor) se ve exactamente igual.
+- **`UTF-8`**: si la celda tiene un punto de código con glifo en la fuente
+  Unicode, se usa ese. Es lo que permite ver fichas de ajedrez y flechas.
 
-Se cambia **en caliente**, sin reiniciar: el selector avisa al UART, que es quien
-interpreta los bytes según llegan. Si el panel y el UART no coincidieran, el
-panel recibiría texto ya convertido y se vería otra cosa.
+Se cambia **en caliente**, sin reiniciar. `/console.txt` y la geometría de la
+rejilla **no dependen del modo**: un byte por celda, siempre.
 
 Los glifos de este modo salen de una segunda fuente embebida
 (`src/terminal/font_unicode.h`, generada por `tools/gen_font_unicode.py`) que
@@ -1016,13 +1016,17 @@ cubre estos rangos:
 | `U+25A0–U+25CF` | Formas geométricas |
 | `U+2654–U+265F` | Fichas de ajedrez |
 
-Un carácter fuera de esos rangos se dibuja como `?` **en una sola celda**, así
-que la rejilla 80x24 nunca se desalinea. La fuente base está en
+Un carácter fuera de esos rangos se dibuja con el byte CP437 de la celda (una
+sola celda siempre, la rejilla nunca se desalinea). La fuente base está en
 `src/terminal/font_cp437.h` (256 glifos de 8x16, generada por
 `tools/gen_font_cp437.py`).
 
 Por el cable **no cambia nada**: el UART sigue moviendo los mismos bytes. Esta
 decodificación es solo para el panel de la ventana y `/console.png`.
+
+> **`/console.txt` es siempre CP437 canónico**: 80 bytes por línea, uno por
+> celda, idéntico en los dos modos. Es lo que hay que usar para comparar byte a
+> byte o para leer la salida de un programa.
 
 ##### Geometría y scrollback
 

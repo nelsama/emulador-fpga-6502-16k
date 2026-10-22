@@ -106,26 +106,18 @@ void TerminalState::feed(uint8_t b) {
 
   if (b < 0x20 || b == 0x7F) return;  // otros controles: sin efecto
 
-  // --- UTF-8 ---
+  // --- Codificacion de entrada ---
   //
-  // El sistema es CP437 y el panel dibuja una tabla CP437 de 8x16, pero un
-  // programa cualquiera puede mandar UTF-8: '♞' es E2 99 9E. Sin decodificar,
-  // esos tres bytes se pintaban como tres celdas en vez de una.
+  // Se decodifica UTF-8 SIEMPRE, porque asi /console.txt y la rejilla quedan
+  // iguales sea cual sea el modo del panel: una secuencia multibyte ocupa una
+  // sola celda. Lo que cambia con el modo es solo el DIBUJO:
+  //   - CP437: se pinta cel.ch con la fuente de 256 glifos (lo clasico).
+  //   - UTF-8: se pinta cel.cp con la fuente Unicode, si el glifo existe.
   //
-  // Aqui solo se decodifica el PROTOCOLO (una secuencia multibyte ocupa una
-  // celda). Que glifo usar para cada caracter no es cosa del terminal: eso lo
-  // decide la fuente del panel.
-  //
-  // El problema: los bytes 0x80-0xBF son a la vez continuacion UTF-8 y glifos
-  // CP437 (0xDB = bloque, 0xB3 = barra vertical), y 0xDB 0xB3 es incluso una
-  // secuencia UTF-8 valida. No se puede adivinar: se decodifica UTF-8 solo si
-  // el usuario lo activa desde el panel (set_utf8).
-  if (b >= 0x80 && !utf8_activo_) {
-    escribir(b);
-    ultimo_fue_cr_ = false;
-    return;
-  }
-
+  // El motivo de que existan los dos: los bytes 0x80-0xBF son a la vez
+  // continuacion UTF-8 y glifos CP437 (0xDB = bloque), y 0xDB 0xB3 es incluso
+  // una secuencia UTF-8 valida. Si no hay ambiguedad (secuencia bien formada)
+  // se decodifica; si la cabecera no se completa, el byte sale como CP437.
   if (b >= 0x80) {
     // Si habia una cabecera pendiente y este byte no es continuacion, la
     // cabecera era en realidad un byte CP437 suelto: se pinta y se sigue.
@@ -158,7 +150,12 @@ void TerminalState::feed(uint8_t b) {
     // Continuacion de una secuencia en curso.
     utf8_cp_ = (utf8_cp_ << 6) | (uint32_t)(b & 0x3F);
     if (--utf8_necesarios_ == 0) {
-      escribir(unicode_a_cp437(utf8_cp_), utf8_cp_);
+      // `ch` es la traduccion a CP437 (o el byte original si no la hay, para
+      // que /console.txt sea igual en los dos modos). `cp` guarda el caracter
+      // real y es lo que usa el panel para dibujar el glifo Unicode.
+      uint8_t ch = unicode_a_cp437(utf8_cp_);
+      if (ch == '?' && utf8_cp_ > 0xFF) ch = utf8_byte_;
+      escribir(ch, utf8_cp_);
       utf8_cp_ = 0;
       ultimo_fue_cr_ = false;
     }
@@ -443,7 +440,12 @@ std::string TerminalState::a_texto() const {
   out.reserve((size_t)(COLS + 1) * ROWS);
   for (int f = 0; f < ROWS; f++) {
     for (int c = 0; c < COLS; c++) {
-      const uint8_t ch = rejilla_[(size_t)f * COLS + c].ch;
+      const Celda& cel = rejilla_[(size_t)f * COLS + c];
+      // Siempre un byte CP437 por celda, independientemente del modo del
+      // panel. Si la celda vino de UTF-8, su `ch` ya es la traduccion a CP437
+      // (o '?' si no hay equivalente); asi la salida es estable y comparable
+      // byte a byte.
+      const uint8_t ch = cel.ch;
       out.push_back((char)(ch < 0x20 ? 0x20 : ch));
     }
     // Sin relleno a la derecha: 80 columnas fijas para comparar con PuTTY.

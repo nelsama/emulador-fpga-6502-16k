@@ -74,6 +74,10 @@ public:
   static constexpr size_t HISTORIAL_MAX = 1000;
 
   // Texto plano de la pantalla (80x24), útil para /console.txt y los tests.
+  // Rejilla como texto, SIEMPRE en CP437: un byte por celda, sin convertir.
+  // Es el formato que exporta /console.txt, independiente del modo que tenga
+  // el panel. Si la celda vino de UTF-8, se devuelve el byte CP437 a que se
+  // traduce, de modo que la salida quede siempre igual para una misma pantalla.
   std::string a_texto() const;
 
   // Pinta la pantalla a un búfer de píxeles 0x00RRGGBB (8x16 por celda), con

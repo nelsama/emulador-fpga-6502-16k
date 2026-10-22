@@ -312,23 +312,19 @@ si los bits 3-7 no están en `entrada`, el programa no llamó a `joy_init()`.
 
 ## 7. Formatos de la consola
 
-- `/console.txt`: 24 líneas de 80 caracteres + `\n` cada una. Es **texto
-  CP437 crudo**: los bytes ≥ 0x80 salen tal cual, sin convertir a UTF-8. Un
-  carácter UTF-8 que mandara el programa ya llega unido en una sola celda.
+- `/console.txt`: **24 líneas de 80 bytes + `\n` cada una, siempre en CP437**.
+  Un byte por celda, sin convertir a UTF-8 y **sin depender del modo del panel**:
+  la misma pantalla da exactamente el mismo fichero en CP437 y en UTF-8. Es lo
+  que hay que usar para comparar byte a byte.
 - `/console.png`: 640×384 píxeles (celda 8×16), colores ANSI de 16 colores,
-  fondo negro. Mismo resultado que ver la ventana, con la fuente Unicode
-  embebida para los rangos que CP437 no cubre.
+  fondo negro. Mismo resultado que ver la ventana, y **esto sí** depende del
+  modo: con UTF-8 se usan glifos Unicode (fichas de ajedrez, flechas).
 
 Para comparar con lo que ve un humano por PuTTY: si el programa usa CP437, PuTTY
 debe estar en modo DOS (CP437); si usa UTF-8 (fichas de ajedrez, por ejemplo),
-PuTTY debe estar en UTF-8. En el emulador se elige con el **botón del panel**
-(`CP437` / `UTF-8`) y debe coincidir con lo que espere el programa. Ver
+PuTTY debe estar en UTF-8. En el emulador el modo del panel solo afecta al
+dibujo: con `UTF-8` se ve lo mismo que en un PuTTY en UTF-8. Ver
 [`PUTTY-SETUP.md`](PUTTY-SETUP.md).
-
-> Nota: `/console.txt` devuelve la rejilla ya decodificada por el terminal, así
-> que refleja el modo elegido en el panel. Para texto CP437 clásico sale crudo; con
-> UTF-8 activo, cada carácter va en una sola celda (un byte CP437, no la
-> secuencia UTF-8 original).
 
 ---
 
