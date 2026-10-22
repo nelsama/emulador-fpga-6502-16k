@@ -271,6 +271,15 @@ bool EmuWindow::start(int video_w, int video_h, int scale, bool terminal) {
     SDL_DestroyWindow(win);
     return false;
   }
+  // VSYNC apagado: el emulador ya limita a ~60 Hz por su cuenta, y con VSYNC
+  // cada SDL_RenderPresent se queda esperando al retrazo del monitor (hasta
+  // 16,7 ms). Eso metia la presentacion dentro del presupuesto entero de un
+  // frame y cualquier variacion se veia como tiron. Sin VSYNC presenta de
+  // inmediato y el ritmo lo marca el bucle, que es mas regular.
+  SDL_SetHint(SDL_HINT_RENDER_VSYNC, "0");
+  if (SDL_RenderSetVSync(ren, 0) != 0) {
+    std::fprintf(stderr, "video: no se pudo desactivar VSYNC: %s\n", SDL_GetError());
+  }
 
   SDL_Texture* tex = SDL_CreateTexture(ren, SDL_PIXELFORMAT_ARGB8888,
                                        SDL_TEXTUREACCESS_STREAMING, w_, h_);

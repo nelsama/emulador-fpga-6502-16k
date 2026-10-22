@@ -397,6 +397,7 @@ int main(int argc, char** argv) {
   clock::time_point last_loop = clock::now();
   double worst_loop_ms = 0.0, worst_poll_ms = 0.0, worst_cpu_ms = 0.0;
   double worst_aud_ms = 0.0, worst_gap_ms = 0.0, worst_draw_ms = 0.0;
+  double worst_render_ms = 0.0, worst_present_ms = 0.0;
   unsigned long last_underruns_ = 0;
   const bool verbose_ = std::getenv("EMU_TRACE") != nullptr;
 
@@ -449,11 +450,18 @@ int main(int argc, char** argv) {
     // carisimo: el bucle acababa dando 118000 vueltas/s al 100 % de CPU, y al
     // estar saturado el SO lo desaloja (huecos de 90 ms) y el audio se queda
     // sin datos. Cuando queda menos de ~1 ms de trabajo se duerme ese resto.
-    if (to_run <= 0 || to_run < cycles_per_ms / 4) {
+    //
+    // El umbral es 1 ms (no 0,25) a proposito: `sleep_for` de unos cientos de
+    // microsegundos lo redondea el planificador de Windows al siguiente tick y
+    // se convierte en una espera de decenas de milisegundos. Con --debug el
+    // bucle hace mas vueltas y cae muchas veces en esta rama, y esos huecos se
+    // veian como tirones en los juegos. Con menos de 1 ms se cede el turno sin
+    // dormir, que no tiene esa penalizacion.
+    if (to_run <= 0 || to_run < cycles_per_ms) {
       const long long falta_us = to_run > 0 ? to_run * 1000000LL / (long long)cpu_hz : 0;
       const long long dormir = falta_us - 200; // despertar un poco antes
       const auto ws = clock::now();
-      if (dormir > 100) {
+      if (dormir > 1000) {
         std::this_thread::sleep_for(std::chrono::microseconds(dormir));
       } else {
         std::this_thread::yield();
@@ -569,13 +577,27 @@ int main(int argc, char** argv) {
       // Dibujar a ~60 Hz (el vídeo es de 320x240; no hace falta más).
       const auto ahora = clock::now();
       if (ahora >= proximo_frame) {
-        proximo_frame = ahora + std::chrono::microseconds(16683);
+        // El siguiente frame se cuenta desde el instante PREVISTO para compensar
+        // un retraso puntual... pero NUNCA se presentan dos frames seguidos:
+        // si nos hemos quedado por detras (VSYNC, planificador, otro proceso),
+        // `proximo_frame` quedaria en el pasado y la condicion seria cierta
+        // otra vez en la vuelta siguiente, presentando en rafaga. Eso es lo que
+        // hacia parpadear la pantalla. Se garantiza un minimo de medio frame
+        // entre presentaciones.
+        proximo_frame += std::chrono::microseconds(16683);
+        const auto minimo = ahora + std::chrono::microseconds(8333);
+        if (proximo_frame < minimo) proximo_frame = minimo;
         const auto t_draw0 = clock::now();
         bus.video()->render(framebuffer);
+        const double render_ms = std::chrono::duration<double, std::milli>(clock::now() - t_draw0).count();
         if (window.has_terminal()) window.set_terminal(uart.terminal());
         // Pines del puerto 1 tal como los lee la CPU (mismo dato que /state.txt).
         window.set_port1(bus.gpio()->port1_read(), bus.gpio()->dir1());
+        const auto t_pres0 = clock::now();
         window.present(framebuffer, bus.gpio()->leds());
+        const double present_ms = std::chrono::duration<double, std::milli>(clock::now() - t_pres0).count();
+        if (render_ms > worst_render_ms) worst_render_ms = render_ms;
+        if (present_ms > worst_present_ms) worst_present_ms = present_ms;
         draw_ms = std::chrono::duration<double, std::milli>(clock::now() - t_draw0).count();
       }
     }
@@ -624,10 +646,11 @@ int main(int argc, char** argv) {
                              fill_ms > AUDIO_TARGET_MS * 2.0;
         if (anomaly && verbose_) {
           std::fprintf(stderr,
-                       "EMU: %.2f MHz | audio: colchon=%.1f ms (max %.1f) + periodo=%.1f ms -> latencia ~%.1f ms | underrun=%lu | bucle=%.1f poll=%.1f cpu=%.1f aud=%.1f dibujo=%.1f hueco=%.1f@%.1fs\n",
+                       "EMU: %.2f MHz | audio: colchon=%.1f ms (max %.1f) + periodo=%.1f ms -> latencia ~%.1f ms | underrun=%lu | bucle=%.1f poll=%.1f cpu=%.1f aud=%.1f dibujo=%.1f (render=%.1f present=%.1f) hueco=%.1f@%.1fs\n",
                        mhz, fill_ms, max_fill * 1000.0 / audio.frequency(), period_ms,
                        fill_ms + period_ms, audio.underruns(), worst_loop_ms, worst_poll_ms,
-                       worst_cpu_ms, worst_aud_ms, worst_draw_ms, worst_gap_ms, worst_gap_at);
+                       worst_cpu_ms, worst_aud_ms, worst_draw_ms, worst_render_ms,
+                       worst_present_ms, worst_gap_ms, worst_gap_at);
         }
         last_underruns_ = audio.underruns();
         sum_fill = 0.0;
@@ -637,6 +660,7 @@ int main(int argc, char** argv) {
         cycles_at_report = cycles_done;
         worst_loop_ms = worst_poll_ms = worst_cpu_ms = worst_aud_ms = worst_gap_ms = worst_sleep_ms = 0.0;
         worst_draw_ms = 0.0;
+        worst_render_ms = worst_present_ms = 0.0;
       }
     }
   }
