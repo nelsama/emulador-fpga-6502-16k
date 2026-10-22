@@ -292,7 +292,8 @@ bool DebugServer::step(Conn& c) {
       build_response(c, c.in.substr(0, end));
       std::string full = "HTTP/1.1 " + resp_.status + "\r\nContent-Type: " + resp_.type +
                          "\r\nContent-Length: " + std::to_string(resp_.body.size()) +
-                         "\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n";
+                         "\r\nCache-Control: no-store\r\n" + resp_.extra_headers +
+                         "Connection: close\r\n\r\n";
       full += resp_.body;
       c.out.swap(full);
       c.in.clear();
@@ -540,6 +541,42 @@ void DebugServer::build_response(Conn& /*c*/, const std::string& head) {
       }
     }
 
+  } else if (path == "/sdcard/read") {
+    // /sdcard/read?name=X.BIN  -> los bytes del archivo
+    //
+    // Cierra el ciclo por HTTP: escribir con /sdcard/write, comprobar lo que ha
+    // generado el ensamblador o el propio monitor, y compararlo sin abrir la
+    // imagen con herramientas externas (que además pelean con el emulador por
+    // el fichero).
+    if (!sd_ || !sd_->montada()) {
+      resp_.status = "503 Service Unavailable";
+      resp_.body = "sin tarjeta SD" + NL;
+    } else {
+      std::string nombre;
+      const size_t pn = query.find("name=");
+      if (pn != std::string::npos) {
+        nombre = query.substr(pn + 5);
+        const size_t amp = nombre.find('&');
+        if (amp != std::string::npos) nombre = nombre.substr(0, amp);
+      }
+      std::vector<uint8_t> datos;
+      std::string err;
+      if (nombre.empty()) {
+        resp_.status = "400 Bad Request";
+        resp_.body = "uso: /sdcard/read?name=NOMBRE.BIN" + NL;
+      } else if (sd_->leer_archivo(nombre, &datos, &err)) {
+        resp_.type = "application/octet-stream";
+        resp_.body.assign(datos.begin(), datos.end());
+        // Cabecera util para scripts: el tamano sin tener que mirar el cuerpo.
+        resp_.extra_headers =
+            "X-File-Name: " + nombre + "\r\nX-File-Size: " +
+            std::to_string(datos.size()) + "\r\n";
+      } else {
+        resp_.status = "404 Not Found";
+        resp_.body = "ERROR: " + err + NL;
+      }
+    }
+
   } else if (path == "/sdcard/remount") {
     // Le manda `sd\r` al monitor (lo mismo que el boton `Remontar` de la
     // ventana). Solo hace falta si se ha tocado la imagen por fuera o se uso
@@ -607,6 +644,11 @@ void DebugServer::build_response(Conn& /*c*/, const std::string& head) {
                                                          : fin - ini);
       };
 
+      // Un `?cmd=` vacío mandaba solo el Enter, y el monitor respondía `ERR: `
+      // a una línea vacía (que además deja la pantalla llena de errores no es
+      // lo que pide quien escribe la URL). Se rechaza con un mensaje claro.
+      const bool pide_cmd = query.find("cmd=") != std::string::npos;
+      const bool pide_data = query.find("data=") != std::string::npos;
       std::string texto;
       bool con_retorno = false;
       const std::string data = param("data");
@@ -622,9 +664,14 @@ void DebugServer::build_response(Conn& /*c*/, const std::string& head) {
 
       if (texto.empty()) {
         resp_.status = "400 Bad Request";
-        resp_.body =
-            "uso: GET/POST /uart?data=TEXTO (%0D para Enter), ?cmd=TEXTO "
-            "(anade Enter) o POST con el cuerpo = bytes crudos" + NL;
+        if (pide_cmd || pide_data) {
+          resp_.body = "ERROR: " + std::string(pide_cmd ? "cmd" : "data") +
+                       " esta vacio (no se envia nada al monitor)" + NL;
+        } else {
+          resp_.body =
+              "uso: GET/POST /uart?data=TEXTO (%0D para Enter), ?cmd=TEXTO "
+              "(anade Enter) o POST con el cuerpo = bytes crudos" + NL;
+        }
       } else {
         Uart* u = bus_->uart();
         for (char c : texto) u->enqueue_rx((uint8_t)c);

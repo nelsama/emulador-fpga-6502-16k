@@ -202,6 +202,30 @@ uint32_t SdCardImpl::espacio_libre() const {
   return (sectors_ - libre) * 512;
 }
 
+bool SdCardImpl::leer_archivo(const std::string& nombre_in,
+                              std::vector<uint8_t>* datos,
+                              std::string* error) const {
+  auto fallo = [&](const char* msg) {
+    if (error) *error = msg;
+    return false;
+  };
+  if (!mounted_ || img_.size() < 1024) return fallo("no hay tarjeta montada");
+  if (!datos) return fallo("destino nulo");
+  const std::string nombre = normalizar_nombre(nombre_in);
+  if (nombre.empty()) return fallo("nombre no valido (formato 8.3)");
+
+  // Se lee de la imagen en RAM, no del fichero: es lo mismo que ve la CPU y no
+  // depende de que el emulador tenga el fichero abierto para escribir.
+  for (const Entrada& e : listar_archivos()) {
+    if (e.nombre != nombre) continue;
+    const size_t off = (size_t)e.sector * 512;
+    if (off + e.bytes > img_.size()) return fallo("archivo corrupto (fuera de la imagen)");
+    datos->assign(img_.begin() + (long)off, img_.begin() + (long)(off + e.bytes));
+    return true;
+  }
+  return fallo("no existe");
+}
+
 std::vector<SdCardImpl::Entrada> SdCardImpl::listar_archivos() const {
   std::vector<Entrada> out;
   if (!mounted_ || img_.size() < 512) return out;

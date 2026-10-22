@@ -48,6 +48,9 @@ private:
     std::string status;
     std::string type;
     std::string body;
+    // Cabeceras adicionales ya formateadas (cada una con su \r\n). Las usa
+    // /sdcard/read para devolver X-File-Name y X-File-Size.
+    std::string extra_headers;
   };
 
   bool step(Conn& c);

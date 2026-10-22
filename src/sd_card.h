@@ -52,6 +52,10 @@ public:
   bool renombrar_archivo(const std::string& viejo, const std::string& nuevo,
                          std::string* error = nullptr);
   std::vector<Entrada> listar_archivos() const;
+  // Lee el contenido de un archivo de la imagen (para verificarlo por HTTP).
+  // Devuelve false si no está montada o el archivo no existe.
+  bool leer_archivo(const std::string& nombre, std::vector<uint8_t>* datos,
+                    std::string* error = nullptr) const;
   // Espacio libre en bytes (desde el sector libre hasta el final).
   uint32_t espacio_libre() const;
   bool montada() const { return mounted_; }

@@ -175,6 +175,7 @@ debería cerrar con `shutdown(SHUT_WR)`.
 | `POST /sdcard/write?name=X.BIN` | Añade un archivo en caliente (cuerpo = datos). Remonta solo |
 | `/sdcard/delete?name=X.BIN` | Borra un archivo de la imagen. Remonta solo |
 | `/sdcard/rename?name=X.BIN&to=Y.BIN` | Renombra un archivo (conserva los datos). Remonta solo |
+| `/sdcard/read?name=X.BIN` | Devuelve los **bytes** del archivo (para verificar lo que generó el ensamblador) |
 | `/sdcard/remount` | Fuerza el re-montaje del monitor (`sd` por el UART) |
 | `/uart?cmd=TEXTO` | Escribe en el UART como PuTTY (añade Enter). También `?data=` o POST |
 | `/screen.png` | Captura del vídeo del FPGA (320×240), `?scale=2..4` |
@@ -229,6 +230,8 @@ curl -s "http://localhost:8080/console.txt" | tail -20
 
 Usa `?cmd=` (añade Enter) casi siempre; `?data=` es para mandar pulsaciones
 sueltas o texto sin ejecutar. El Enter del monitor es `\r` (`%0D`), no `\n`.
+`?cmd=` **vacío devuelve 400 y no envía nada**: un Enter suelto hace que el
+monitor responda `ERR:` y ensucia la consola.
 
 `/state.txt` incluye también el **flag de usuario** (`$C004 flag usuario: 0/1`),
 un bit R/W que sobrevive al reset del sistema y sirve para que el software

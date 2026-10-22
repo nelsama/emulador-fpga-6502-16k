@@ -195,6 +195,7 @@ pantalla sin intervención humana**.
 | `POST /sdcard/write?name=X.BIN` | texto | Añade un archivo (cuerpo = datos binarios) |
 | `/sdcard/delete?name=X.BIN` | texto | Borra un archivo |
 | `/sdcard/rename?name=X.BIN&to=Y.BIN` | texto | Renombra un archivo |
+| `/sdcard/read?name=X.BIN` | binario | Devuelve los bytes del archivo (`X-File-Name`, `X-File-Size`) |
 | `/sdcard/remount` | texto | Fuerza el re-montaje del monitor (`sd` por el UART) |
 | `/uart?cmd=TEXTO` | texto | Escribe en el UART como PuTTY y añade Enter. También `?data=` o POST |
 | `/vram.txt` | texto | Tilemap, atributos y OAM en hexadecimal + vista ASCII 40×30 |
@@ -251,7 +252,6 @@ curl "http://localhost:8080/uart?cmd=ls"            # envía "ls" + Enter
 curl "http://localhost:8080/uart?data=ls%0D"        # lo mismo, con %0D = Enter
 curl "http://localhost:8080/uart?cmd=sd%3A"         # %3A = ':'
 printf 'help\r' | curl --data-binary @- http://localhost:8080/uart   # bytes crudos
-curl "http://localhost:8080/console.txt"            # ver la respuesta
 ```
 
 Detalles del endpoint `/uart`:
@@ -262,8 +262,19 @@ Detalles del endpoint `/uart`:
 | `?data=TEXTO` | Envía el texto tal cual. Los `%XX` se decodifican y `+` es un espacio |
 | `?cmd=TEXTO` | Igual, pero **añade el Enter (`\r`)** al final |
 | Cuerpo del POST | Si no hay `data` ni `cmd`, se envían los bytes del cuerpo **tal cual**, sin decodificar |
+| `?cmd=` vacío | Devuelve `400` y **no envía nada** (un Enter suelto hacía que el monitor respondiera `ERR:`) |
 | Respuesta | Solo confirma cuántos bytes se enviaron; **no** espera al monitor |
 | Salida del monitor | Se lee aparte con `/console.txt` (o con PuTTY) |
+
+El endpoint es **asíncrono**: no hay forma de que la propia petición espere al
+monitor (no se implementa a propósito, porque no hay una señal fiable de cuándo
+termina un comando). El patrón es enviar y luego leer la consola:
+
+```bash
+curl -s "http://localhost:8080/uart?cmd=ls" >/dev/null
+sleep 0.5                                          # dar tiempo al monitor
+curl -s "http://localhost:8080/console.txt" | tail -20
+```
 
 `\r` (`%0D`) es el Enter del monitor; `\n` (`%0A`) solo hace saltar de línea
 sin ejecutar el comando. Hay un tope de 64 KiB en la FIFO de entrada: si se
