@@ -809,6 +809,17 @@ int EmuWindow::dibujar_modulo_sd(void* renderer, int x, int y) {
     SDL_RenderDrawRect(ren, &r);
     texto(r.x + 6, r.y + 1, "Remontar", SDL_Color{200, 220, 250, 255});
     zonas_.push_back(Zona{r.x, r.y, r.w, r.h, "remount", ""});
+
+    // Montar otra imagen .img en caliente: abre el selector de archivos y
+    // sustituye la tarjeta que esta viendo la CPU. No reinicia el emulador.
+    const int mw = 6 * TERM_CW + 12;
+    SDL_Rect m{r.x - mw - 6, y + 3, mw, 16};
+    SDL_SetRenderDrawColor(ren, 52, 46, 78, 255);
+    SDL_RenderFillRect(ren, &m);
+    SDL_SetRenderDrawColor(ren, 150, 120, 220, 255);
+    SDL_RenderDrawRect(ren, &m);
+    texto(m.x + 6, m.y + 1, "Montar", SDL_Color{215, 200, 250, 255});
+    zonas_.push_back(Zona{m.x, m.y, m.w, m.h, "mount_img", ""});
   }
 
   if (n == 0) {
