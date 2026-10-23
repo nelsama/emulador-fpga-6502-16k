@@ -186,7 +186,7 @@ pantalla sin intervención humana**.
 | Ruta | Tipo | Contenido |
 |---|---|---|
 | `/` | HTML | Índice con vista previa del vídeo (se refresca sola) + panel de estado en vivo |
-| `/screen.png` | PNG | Captura exacta de lo que saldría por HDMI (320×240) |
+| `/screen.png` | PNG | **Último frame presentado** (320×240): lo que se vio de verdad |
 | `/screen.png?scale=2` | PNG | La misma captura ampliada ×2, ×3 o ×4 (útil para leer texto) |
 | `/screen.ppm` | PPM | La misma imagen sin comprimir (P6), para herramientas sin decodificador PNG |
 | `/console.txt` | texto | Pantalla de la **consola** (80×24), tal como la interpreta el terminal |
@@ -225,6 +225,14 @@ Capturar la **consola** de un programa de texto (Tetris, editor, menús):
 curl http://localhost:8080/console.txt          # 80x24 en texto plano
 curl -o consola.png "http://localhost:8080/console.png?scale=2"
 ```
+
+> **`/screen.png` no reconstruye la imagen.** Devuelve el último frame que
+> `Video::render()` pintó (se guarda en `last_frame()`), así que la captura
+> muestra lo que salió por pantalla aunque entre medias la CPU haya cambiado la
+> VRAM. Para ver el **estado actual** de la VRAM está `/vram.txt`.
+>
+> Si el emulador se lanzó sin ventana o aún no ha pintado ningún frame,
+> `/screen.png` responde `503`.
 
 `/console.txt` es lo más útil para un agente: permite comprobar qué está
 mostrando un programa de terminal sin abrir la ventana ni interpretar imágenes.
@@ -438,6 +446,59 @@ taskkill //F //IM emulador.exe
 | Olvidar `--debug` | `ConnectionRefused` en el puerto 8080 |
 | Cargar en la dirección equivocada | Pantalla en blanco, sin mensaje de error |
 | Concluir "va congelado" de una captura | Dos capturas nunca son idénticas (y no deben serlo) |
+| Poner espacios sin codificar en `?cmd=` | `curl` falla con `exit 3` y no se envía nada |
+| Recompilar sin mirar antes | Trabajo duplicado y se pisa el `.exe` del usuario |
+
+`curl` no acepta espacios en la query. Hay que codificarlos como `%20`:
+
+```bash
+# MAL: curl sale con codigo 3 y no manda nada
+curl "http://localhost:8080/uart?cmd=LOAD LAUNCHER 0800"
+
+# BIEN
+curl "http://localhost:8080/uart?cmd=LOAD%20LAUNCHER%200800"
+```
+
+#### Encadenar el ciclo en una sola llamada
+
+Reiniciar, cargar, ejecutar y capturar no son cuatro decisiones: son **un
+paso**. Separarlos en llamadas sueltas multiplica el tiempo de espera por el
+número de idas y vueltas.
+
+```bash
+python tools/emu_agent.py stop  >/dev/null 2>&1; sleep 1
+python tools/emu_agent.py start >/dev/null 2>&1; sleep 4
+curl -s "http://localhost:8080/uart?cmd=LOAD%20PACMAN.BIN%200800" >/dev/null; sleep 2
+curl -s "http://localhost:8080/uart?cmd=R%200800" >/dev/null; sleep 3
+curl -s -o captura.png http://localhost:8080/screen.png
+curl -s http://localhost:8080/console.txt | grep "bytes en"
+```
+
+Los tiempos **no son opcionales**: `start` tarda ~4 s en escuchar, un `LOAD`
+grande ~2 s y el primer redibujado del programa ~3 s. Si se acortan, la captura
+sale antes de que el programa pinte y parece que no funciona.
+
+#### Comprobar qué se cargó de verdad
+
+Cuando "sigue viéndose igual", el tamaño que reporta el monitor no falla nunca:
+
+```bash
+curl -s http://localhost:8080/console.txt | grep "bytes en"
+# OK: 13960 bytes en $0800-$3E87
+```
+
+Si ese número no coincide con el `.bin` que se cree haber copiado, el problema
+está en la tarjeta o en el nombre del fichero, **no en el código**. Para mirar
+la tarjeta sin herramientas externas:
+
+```bash
+curl -s http://localhost:8080/sdcard/ls
+curl -s -o copia.bin "http://localhost:8080/sdcard/read?name=PACMAN.BIN"
+```
+
+> A diferencia de lo que se podría suponer, **no hace falta reiniciar** para
+> cambiar de imagen: el módulo SD del panel tiene el botón *Montar* (acción
+> `mount_img`) y `SdCardImpl` trabaja sobre el fichero en disco.
 
 > **Nota:** el PNG va sin comprimir (deflate "stored") porque no se depende de
 > zlib. Pesa ~230 KB, pero se genera en memoria y se envía por tramos, así que
@@ -779,6 +840,51 @@ Verificado: intervalo medido entre inicios de VBLANK = **16,683 ms (59,94 Hz)**.
 > CPU reales. Los programas que miden el tiempo con él (como el SID player, que
 > usa `$C038-$C03C` a 18320 µs por frame) no se ven afectados por el ritmo del
 > vídeo.
+
+#### El render lee la VRAM viva
+
+`render()` pinta directamente desde el tilemap, los atributos, los patrones y el
+OAM **del momento**, igual que el `video_core.vhd`, que direcciona la celda de
+cada píxel mientras recorre el barrido. No hay instantánea ni copia previa.
+
+Esto es deliberado. Una versión anterior copiaba toda la VRAM al entrar en
+`render()` para evitar frames rasgados, y rompía las **escrituras dobles** del
+6502: en un RMW (`INC`, `ASL`, `STA` tras read-modify-write...) el chip escribe
+primero el valor viejo y luego el nuevo. Con la copia en medio, el valor viejo
+ganaba el frame entero y el efecto se veía al revés.
+
+El caso que lo destapó: en Pac-Man las *power pellets* parpadean escribiendo
+`TILE_POWER` (`$03`) y `TILE_BLANK` (`$00`). Como el juego carga el patrón del
+power pellet también en el tile `$00`, la escritura vieja dejaba ese patrón
+pintándose con el atributo de la pastilla: un **cuadrado marrón** que no
+desaparecía nunca.
+
+En el hardware no hay carrera porque el software escribe en VRAM dentro del
+VBLANK (`vc_wait_vblank()` / `vc_wait_vblank_end()`).
+
+El frame resultante se guarda en `Video::last_frame()` y es lo que sirve
+`/screen.png`: así la captura muestra **lo que salió por pantalla**, aunque la
+CPU haya tocado la VRAM entre medias. Para el estado actual de la memoria está
+`/vram.txt`.
+
+#### Detalles que confunden al programar
+
+1. **La fuente solo dibuja `$20-$7F`.** No hay caracteres de bloque (`╔═║▓`):
+   los marcos se hacen con `+ - | =`.
+
+2. **Cada celda tiene 2 colores útiles**: fondo (color 1) y tinta (color 3).
+   El color 0 es transparente y el 2 no lo usa la fuente.
+
+3. **`BG_COLOR` comparte entrada con paleta 3 / color 3.** Es `pal_bg(15)`.
+   Usar `VC_BGPAL_3` para texto visible hace que `vc_set_bgcolor()` lo pise y el
+   texto quede **invisible** (mismo color que el fondo).
+
+4. **La paleta sobrevive al reset del CPU.** Si un programa anterior la
+   redefinió, el siguiente hereda esos colores. Hay que fijar las entradas que
+   se usen al arrancar, sin confiar en los presets.
+
+5. **Tamaño del `attr`**: el campo de paleta son los bits **1:0** (4 paletas de
+   fondo); los bits altos no los usa el render del fondo.
 
 ### GPIO
 

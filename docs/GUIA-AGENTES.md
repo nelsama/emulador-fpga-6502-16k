@@ -293,6 +293,37 @@ si los bits 3-7 no están en `entrada`, el programa no llamó a `joy_init()`.
 | Capturar demasiado pronto | el programa aún está cargando | esperar ~2 s tras `load` y ~3 s tras `r` |
 | Creer que el ANSI no llega | el texto sí llega; el que interpreta es el host | este emulador **sí** interpreta ANSI (CUP, ED, EL, SGR) y CP437 |
 | Buscar Unicode | el cable mueve bytes sueltos | el panel lo dibuja, pero no lo cuentes para el programa |
+| Espacios sin codificar en `?cmd=` | `curl` sale con **código 3** y no envía nada | codificarlos como `%20` |
+| Recompilar sin mirar antes | trabajo duplicado y se pisa el `.exe` del usuario | si `emulador.exe` existe, **ejecutar**; compilar solo si falta o lo piden |
+| Suponer qué se cargó | se depura código que no es el que corre | leer `bytes en` en `/console.txt` y compararlo con el `.bin` |
+
+### Un comando, un ciclo
+
+Reiniciar, cargar, ejecutar y capturar son **un solo paso**, no cuatro
+decisiones. Separarlos multiplica la espera por cada ida y vuelta:
+
+```bash
+python tools/emu_agent.py stop  >/dev/null 2>&1; sleep 1
+python tools/emu_agent.py start >/dev/null 2>&1; sleep 4
+curl -s "http://localhost:8080/uart?cmd=LOAD%20PACMAN.BIN%200800" >/dev/null; sleep 2
+curl -s "http://localhost:8080/uart?cmd=R%200800" >/dev/null; sleep 3
+curl -s -o captura.png http://localhost:8080/screen.png
+curl -s http://localhost:8080/console.txt | grep "bytes en"
+```
+
+### Cuando "sigue viéndose igual"
+
+Antes de tocar código, en este orden y parando en el primero que falle:
+
+| Comprobación | Cómo | Esperado |
+|---|---|---|
+| ¿El emulador responde? | `emu_agent.py status` | HTTP contesta |
+| ¿Qué cargó? | `/console.txt` → `bytes en` | = tamaño del `.bin` |
+| ¿Qué hay en la tarjeta? | `/sdcard/ls` y `/sdcard/read?name=X` | = tamaño del `.bin` |
+| ¿Está en el prompt? | `/console.txt` | empieza por `>` |
+
+Si el tamaño que reporta el monitor no coincide con el binario, el problema es
+la tarjeta o el nombre del fichero: **no es el código**.
 
 ---
 
