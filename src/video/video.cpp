@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <cstdio>
+#include <cstring>
 
 #include "video/font_c64.h"
 
@@ -226,55 +227,34 @@ uint16_t Video::pal_index(int area, uint8_t attrib_byte, uint8_t color) const {
   return idx & 0x1F;
 }
 
-void Video::take_snapshot() {
-  // Copia de todo lo que necesita el render. Al ser un struct con arrays fijos,
-  // la asignación es una copia completa (memset + memcpy que el compilador
-  // optimiza a unos pocos movimientos vectoriales).
-  snap_.tilemap = tilemap_;
-  snap_.attrib = attrib_;
-  snap_.fgpat = fgpat_;
-  snap_.sppat = sppat_;
-  snap_.oam = oam_;
-  snap_.pal = pal_;
-
-  // Los registros de scroll y de bandas también, para que todas las líneas del
-  // frame usen los mismos valores.
-  snap_.scroll_x = scroll_x_lo_ | ((scroll_x_hi_ & 0x07) << 8);
-  snap_.scroll_y = scroll_y_lo_ | ((scroll_y_hi_ & 0x07) << 8);
-  snap_.band2_x = band2_x_lo_ | ((band2_x_hi_ & 0x07) << 8);
-  snap_.band2_y = band2_y_lo_ | ((band2_y_hi_ & 0x07) << 8);
-  snap_.band3_x = band3_x_lo_ | ((band3_x_hi_ & 0x07) << 8);
-  snap_.band3_y = band3_y_lo_ | ((band3_y_hi_ & 0x07) << 8);
-  snap_.raster0 = raster0_;
-  snap_.raster1 = raster1_;
-}
-
 void Video::render(uint32_t* out) {
-  // Instantánea primero: a partir de aquí se pinta SOLO de la copia.
+  // Se pinta leyendo la VRAM VIVA, igual que el video_core.vhd, que direcciona
+  // la celda de cada pixel mientras recorre la línea de barrido.
   //
-  // Sin esto, la CPU (que sigue ejecutándose) podía escribir en la VRAM a mitad
-  // del recorrido, y el frame salía mezclando dos estados: unas filas con el
-  // tilemap viejo y otras con el nuevo. Ese era el origen de los "franjas" y de
-  // que un panel (GAME OVER) apareciera duplicado o partido.
-  take_snapshot();
-
-  const Snapshot& s = snap_;
-  const int scx = s.scroll_x;
-  const int scy = s.scroll_y;
+  // Antes se copiaba todo el estado a una instantánea (_snapshot_) al entrar
+  // aquí. Eso evitaba frames rasgados, pero rompía las escrituras DOBLES del
+  // 6502: en un RMW el chip escribe primero el valor VIEJO y luego el nuevo.
+  // Con la copia, la escritura vieja ganaba el frame entero y el efecto se
+  // veía invertido (p. ej. Pac-Man: la power pellet nunca desaparecía).
+  //
+  // En el hardware real no hay carrera posible: el juego espera el VBLANK
+  // antes de tocar la VRAM (vc_wait_vblank en la lib del juego).
+  const int scx = scroll_x_lo_ | ((scroll_x_hi_ & 0x07) << 8);
+  const int scy = scroll_y_lo_ | ((scroll_y_hi_ & 0x07) << 8);
 
   // BG_COLOR = paleta de fondo entrada 15.
-  const uint32_t bg_color = rgb444_to_rgba(s.pal[15]);
+  const uint32_t bg_color = rgb444_to_rgba(pal_[15]);
 
   for (int py = 0; py < H; py++) {
-    // Determinar banda y scroll según línea (todo de la instantánea).
+    // Determinar banda y scroll según línea.
     int band_scroll_x = scx;
     int band_scroll_y = scy;
-    if (s.raster0 != 0xFF && py < (s.raster0 & 0xF8)) {
-      band_scroll_x = s.band2_x;
-      band_scroll_y = s.band2_y;
-    } else if (s.raster1 != 0xFF && py >= (s.raster1 & 0xF8)) {
-      band_scroll_x = s.band3_x;
-      band_scroll_y = s.band3_y;
+    if (raster0_ != 0xFF && py < (raster0_ & 0xF8)) {
+      band_scroll_x = band2_x_lo_ | ((band2_x_hi_ & 0x07) << 8);
+      band_scroll_y = band2_y_lo_ | ((band2_y_hi_ & 0x07) << 8);
+    } else if (raster1_ != 0xFF && py >= (raster1_ & 0xF8)) {
+      band_scroll_x = band3_x_lo_ | ((band3_x_hi_ & 0x07) << 8);
+      band_scroll_y = band3_y_lo_ | ((band3_y_hi_ & 0x07) << 8);
     }
 
     int map_y = (py + band_scroll_y) & 0xFF; // envuelve módulo 256 (32 tiles × 8)
@@ -287,13 +267,13 @@ void Video::render(uint32_t* out) {
       int pix_x = map_x % TILE_W;
 
       int cell = tile_row * MAP_W + tile_col;
-      uint8_t tile = s.tilemap[cell];
-      uint8_t attr = s.attrib[cell];
+      uint8_t tile = tilemap_[cell];
+      uint8_t attr = attrib_[cell];
 
       // Color del píxel en el patrón de fondo (2bpp planar).
       int word = tile * 16 + pix_y * 2;
-      uint8_t p0 = s.fgpat[word];
-      uint8_t p1 = s.fgpat[word + 1];
+      uint8_t p0 = fgpat_[word];
+      uint8_t p1 = fgpat_[word + 1];
       int bit = 7 - pix_x;
       int c0 = (p0 >> bit) & 1;
       int c1 = (p1 >> bit) & 1;
@@ -304,7 +284,7 @@ void Video::render(uint32_t* out) {
         pixel = bg_color; // transparente -> BG_COLOR
       } else {
         uint16_t pal = pal_index(0, attr, color);
-        pixel = rgb444_to_rgba(s.pal[pal]);
+        pixel = rgb444_to_rgba(pal_[pal]);
       }
 
       out[py * W + px] = pixel;
@@ -314,10 +294,10 @@ void Video::render(uint32_t* out) {
   // ---- Sprites (dibujados después del fondo) ----
   for (int i = 0; i < 32; i++) {
     int base = i * 5;
-    uint8_t x8 = s.oam[base + 0];
-    uint8_t y8 = s.oam[base + 1];
-    uint8_t tile = s.oam[base + 2];
-    uint8_t flags = s.oam[base + 3];
+    uint8_t x8 = oam_[base + 0];
+    uint8_t y8 = oam_[base + 1];
+    uint8_t tile = oam_[base + 2];
+    uint8_t flags = oam_[base + 3];
 
     if (y8 >= 248) continue; // deshabilitado
 
@@ -345,8 +325,8 @@ void Video::render(uint32_t* out) {
         if (flip_y) fy = 7 - fy;
 
         int word = tile * 16 + fy * 2;
-        uint8_t p0 = s.sppat[word];
-        uint8_t p1 = s.sppat[word + 1];
+        uint8_t p0 = sppat_[word];
+        uint8_t p1 = sppat_[word + 1];
         int bit = 7 - fx;
         int c0 = (p0 >> bit) & 1;
         int c1 = (p1 >> bit) & 1;
@@ -355,7 +335,7 @@ void Video::render(uint32_t* out) {
         if (color == 0) continue; // transparente
 
         uint16_t pal = ((uint16_t)spal << 2) | color;
-        uint32_t pixel = rgb444_to_rgba(s.pal[16 + pal]);
+        uint32_t pixel = rgb444_to_rgba(pal_[16 + pal]);
 
         // PRIO = 1 -> detrás del fondo (sólo se dibuja si el fondo ahí es
         // transparente / BG_COLOR). Simplificación: lo dibujamos siempre por
@@ -368,4 +348,11 @@ void Video::render(uint32_t* out) {
       }
     }
   }
+
+  // Guarda lo que se acaba de pintar: es el frame que salio por pantalla, y es
+  // lo que sirve /screen.png. 320x240x4 = 300 KB, una copia que el compilador
+  // vectoriza (<0,1 ms).
+  const size_t n = (size_t)W * H;
+  if (last_frame_.size() != n) last_frame_.resize(n);
+  std::memcpy(last_frame_.data(), out, n * sizeof(uint32_t));
 }

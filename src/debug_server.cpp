@@ -408,8 +408,16 @@ void DebugServer::build_response(Conn& /*c*/, const std::string& head) {
       const int s = atoi(query.c_str() + sq + 6);
       if (s >= 1 && s <= 4) scale = s;
     }
-    static std::vector<uint32_t> fb((size_t)Video::W * Video::H);
-    v->render(fb.data());
+    // Se sirve el ULTIMO FRAME RENDERIZADO, no una reconstruccion. Asi lo que
+    // se ve en la captura es exactamente lo que salio por pantalla, aunque
+    // entre medias la CPU haya cambiado la VRAM (p. ej. un blink que dura
+    // medio frame).
+    const std::vector<uint32_t>& fb = v->last_frame();
+    if (fb.empty()) {
+      resp_.status = "503 Service Unavailable";
+      resp_.body = "aun no hay ningun frame dibujado\n";
+      return;
+    }
     resp_.type = "image/png";
     debug_dump::screenshot_png_mem(fb.data(), Video::W, Video::H, scale, resp_.body);
     if (resp_.body.empty()) {
@@ -426,8 +434,12 @@ void DebugServer::build_response(Conn& /*c*/, const std::string& head) {
       resp_.body = "sin Core de Video\n";
       return;
     }
-    static std::vector<uint32_t> fb((size_t)Video::W * Video::H);
-    v->render(fb.data());
+    const std::vector<uint32_t>& fb = v->last_frame();
+    if (fb.empty()) {
+      resp_.status = "503 Service Unavailable";
+      resp_.body = "aun no hay ningun frame dibujado\n";
+      return;
+    }
     resp_.type = "image/x-portable-pixmap";
     debug_dump::screenshot_ppm_mem(fb.data(), Video::W, Video::H, resp_.body);
 

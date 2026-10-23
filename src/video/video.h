@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <vector>
 
 #include "device.h"
 
@@ -50,7 +51,16 @@ public:
   void sync_scanlines(long long linea);
 
   // Genera la imagen (RGBA8888 / 320x240) en el buffer del llamador.
+  //
+  // Se lee la VRAM VIVA, como el video_core.vhd (que direcciona la celda en
+  // cada línea de barrido). Ver el comentario de render() en video.cpp para el
+  // razonamiento: congelar la VRAM rompía las escrituras dobles del 6502.
   void render(uint32_t* out);
+
+  // Último frame RENDERIZADO (no la VRAM de ahora): es lo que salió por
+  // pantalla. Lo usa el depurador para que /screen.png muestre lo que de
+  // verdad se vio y no una reconstrucción a partir de un estado posterior.
+  const std::vector<uint32_t>& last_frame() const { return last_frame_; }
 
   // Tilemap, atributos y OAM (para el renderer y el debugger).
   const std::array<uint8_t, 2048>& tilemap()   const { return tilemap_; }
@@ -92,29 +102,8 @@ private:
   // Paletas: 32 entradas × 12 bits (RGB444)
   std::array<uint16_t, 32> pal_{};
 
-  // --- Instantánea para render() ---------------------------------------
-  //
-  // render() recorre la pantalla leyendo la VRAM. La CPU sigue ejecutándose
-  // entre vuelta y vuelta del bucle principal, así que si escribe mientras se
-  // pinta, unas filas salen con el estado viejo y otras con el nuevo: el frame
-  // no es coherente consigo mismo (GAME OVER dibujado dos veces, textos
-  // partidos, etc.).
-  //
-  // Se copia todo lo que se necesita AL ENTRAR en render() y se pinta solo de
-  // la copia. El frame queda consistente aunque la CPU siga escribiendo.
-  struct Snapshot {
-    std::array<uint8_t, 2048> tilemap;
-    std::array<uint8_t, 2048> attrib;
-    std::array<uint8_t, 256 * 8 * 2> fgpat;
-    std::array<uint8_t, 64 * 8 * 2> sppat;
-    std::array<uint8_t, 160> oam;
-    std::array<uint16_t, 32> pal;
-    int scroll_x, scroll_y;
-    int band2_x, band2_y, band3_x, band3_y;
-    uint8_t raster0, raster1;
-  };
-  Snapshot snap_{};
-  void take_snapshot();
+  // Último frame renderizado (320x240 RGBA8888).
+  std::vector<uint32_t> last_frame_;
 
   // Plano 0 retenido al escribir la fila (ver manual §2.2)
   uint8_t pending_plane0_ = 0;
