@@ -867,7 +867,7 @@ El frame resultante se guarda en `Video::last_frame()` y es lo que sirve
 CPU haya tocado la VRAM entre medias. Para el estado actual de la memoria está
 `/vram.txt`.
 
-#### Estado inicial de la VRAM (y qué está reservado)
+#### Estado inicial de la VRAM
 
 Al arrancar, el core deja la VRAM en un estado **concreto** que conviene conocer,
 porque hay zonas que el programa **no** posee:

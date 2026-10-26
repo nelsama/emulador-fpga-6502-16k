@@ -341,11 +341,10 @@ la tarjeta o el nombre del fichero: **no es el código**.
 
 ---
 
-## 6b. VRAM: estado inicial y zonas reservadas
+## 6b. VRAM: estado inicial
 
-Lo que el emulador deja en la VRAM al arrancar **no es todo cero**, y hay partes
-que el programa no posee. Si tu arte se ve bien aquí y mal en la placa, mira
-primero esto.
+Lo que el emulador deja en la VRAM al arrancar **no es todo cero**. Si tu arte se
+ve bien aquí y mal en la placa, mira primero esto.
 
 | Zona | Tras el arranque |
 |---|---|
