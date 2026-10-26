@@ -67,18 +67,26 @@ static void test_patrones_demo() {
       if (sp[patron * 16 + i] != 0) libres = false;
   check(libres, "patrones: 3..63 libres al arrancar");
 
-  // El setup deja 0..2 a cero y limpia tilemap/atributos.
+  // Escribir algo en la VRAM ANTES del setup, para ver que se borra.
+  v.write(0xD800, 0x05, resp);  // dir lo
+  v.write(0xD801, 0x00, resp);  // area 00 = tilemap
+  v.write(0xD802, 0x42, resp);
+  check(v.tilemap()[5] == 0x42, "setup: escritura previa aplicada");
+
+  // $D816 solo dispara: BUSY=1 y la escritura siguiente del CPU se IGNORA,
+  // como en el hardware (init_done='0').
   v.write(0xD816, 1, resp);
   check(v.read(0xD817, resp) == 0x01, "setup: BUSY activo tras $D816");
-  bool ceros = true;
-  for (int patron = 0; patron <= 2; patron++)
-    for (int i = 0; i < 16; i++)
-      if (sp[patron * 16 + i] != 0) ceros = false;
-  check(ceros, "setup: patrones de sprite 0..2 a cero");
+  v.write(0xD800, 0x07, resp);
+  v.write(0xD801, 0x00, resp);
+  v.write(0xD802, 0x99, resp);
+  check(v.tilemap()[7] == 0x00, "setup: escritura durante BUSY se ignora");
 
-  bool tm_cero = true;
-  for (uint8_t t : v.tilemap()) if (t != 0) tm_cero = false;
-  check(tm_cero, "setup: tilemap a cero");
+  // Al terminar el BUSY (tick_frame) se aplica: todo a cero.
+  v.tick_frame();
+  check(v.read(0xD817, resp) == 0x10, "setup: VIDEO_READY al terminar");
+  check(v.tilemap()[5] == 0x00, "setup: tilemap a cero tras el setup");
+  check(v.tilemap()[7] == 0x00, "setup: la escritura bloqueada no reaparece");
 
   // La fuente ASCII SÍ se re-expande (el setup no la deja en blanco).
   const auto& bg = v.bg_patterns();

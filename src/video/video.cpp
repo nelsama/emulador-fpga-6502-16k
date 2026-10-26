@@ -43,10 +43,11 @@ void Video::load_sprite_pattern(int patron, const uint8_t* p0, const uint8_t* p1
 // Estado de la VRAM tras la inicializacion del core: los patrones de sprite
 // 0, 1 y 2 tienen las formas de demo (cara, rombo, X).
 //
-// En hardware esos patrones NO estan libres: el arranque los escribe y, tras un
-// setup ($D816), los deja a cero. Un programa que use el patron 0 ve una cara
-// en la placa aunque en el emulador cargara su propio dibujo. El rango libre
-// para el arte del programa es 3..63.
+// En hardware esos patrones NO arrancan vacios: el arranque los escribe con las
+// formas de demo y, tras un setup ($D816), los deja a cero. No estan reservados
+// (ver docs del core, 07-MANUAL-PROGRAMACION.md §6.0): los 64 son utilizables,
+// pero un programa que use el 0..2 debe ESCRIBIRLOS en vez de asumir que estan
+// vacios, o verá la cara en la placa.
 void Video::load_demo_sprite_patterns() {
   load_sprite_pattern(0, kDemoCaraP0, kDemoCaraP1);
   load_sprite_pattern(1, kDemoRomboP0, kDemoRomboP1);
@@ -57,6 +58,20 @@ void Video::load_demo_sprite_patterns() {
 void Video::clear_demo_sprite_patterns() {
   for (int patron = 0; patron <= 2; patron++)
     for (int i = 0; i < 16; i++) sppat_[patron * 16 + i] = 0;
+}
+
+// Efecto de la secuencia de inicializacion: fases 0..4 del core.
+// Se ejecuta al FINAL del setup, no al escribirlo (ver $D816).
+void Video::aplicar_setup() {
+  // Fase 0: tilemap a cero. Fase 1: atributos a cero.
+  tilemap_.fill(0);
+  attrib_.fill(0);
+  // Fase 2: tiles de fondo 0..7 a cero (con setup_latch=1 no son demo).
+  for (int i = 0; i < 8 * 16; i++) fgpat_[i] = 0;
+  // Fase 3: patrones de sprite 0..2 a cero.
+  clear_demo_sprite_patterns();
+  // Fase 4: la fuente SI se re-expande.
+  load_default_font();
 }
 
 Video::Video() {
@@ -118,20 +133,20 @@ void Video::write(uint16_t addr, uint8_t data, bool& resp) {
       break;
     }
     case 0xD816: {
-      // SETUP por hardware: el core limpia tilemap, atributos, patrones de
-      // fondo 0..7 y patrones de sprite 0..2, y re-expande la fuente ASCII
-      // (video_core.vhd, fases 0..4 con setup_latch=1). Aqui se reproducen los
-      // efectos visibles; el temporizado (BUSY -> VIDEO_READY) lo hace
-      // tick_frame(), igual que antes.
+      // SETUP por hardware ($D816).
+      //
+      // En el core esto relanza las fases 0..4 de la inicializacion: limpia
+      // tilemap, atributos, fondo 0..7 y sprites 0..2, y re-expande la fuente.
+      // Mientras dura (init_done='0') el core IGNORA las escrituras del CPU a
+      // la VRAM (video_core.vhd:965) y deja BUSY=1 en $D817.
+      //
+      // El emulador no puede tardar los ~275 us reales, pero SI debe reproducir
+      // el bloqueo: si se limpiara de golpe, un programa que escriba justo
+      // despues del setup veria su escritura sobrevivir aqui y perderse en la
+      // placa. Por eso el setup queda PENDIENTE y se ejecuta al finalizar el
+      // BUSY (en tick_frame), que es cuando el hardware libera init_done.
       setup_busy_ = 0x01;
-      tilemap_.fill(0);
-      attrib_.fill(0);
-      // Fondo 0..7: el setup escribe ceros.
-      for (int i = 0; i < 8 * 16; i++) fgpat_[i] = 0;
-      // Sprites 0..2: tambien ceros (fase 3 con setup_latch).
-      clear_demo_sprite_patterns();
-      // Fase 4: la fuente SI se re-expande (la escribe de nuevo).
-      load_default_font();
+      setup_pendiente_ = true;
       break;
     }
     default: resp = false; break;
@@ -150,6 +165,13 @@ void Video::tick_frame() {
   const bool vblank = (line >= V_VISIBLE);
   status_ = (vblank ? 0x80 : 0x00) | 0x10; // VBLANK | VIDEO_READY
   if (setup_busy_ & 0x01) {
+    // Fin del setup: ahora el core libera init_done y aplica el resultado.
+    // Se hace AQUI y no al escribir $D816 para que las escrituras del CPU
+    // hechas durante el BUSY se descarten, como en el hardware.
+    if (setup_pendiente_) {
+      aplicar_setup();
+      setup_pendiente_ = false;
+    }
     setup_busy_ = 0x10; // VIDEO_READY tras el setup
   }
 }
@@ -186,6 +208,14 @@ void Video::sync_scanlines(long long linea) {
 }
 
 void Video::write_vram(uint8_t lo, uint8_t hi, uint8_t data) {
+  // Mientras la inicializacion (o un setup) esta en curso, el core IGNORA las
+  // escrituras del CPU a la VRAM: el puerto A lo controla la FSM
+  // (video_core.vhd:965, "vid_we = '1' and init_done = '1'").
+  //
+  // Scroll y paleta NO pasan por aqui, asi que siguen funcionando: eso coincide
+  // con el hardware, que las deja escribir en cualquier momento.
+  if (setup_busy_ & 0x01) return;
+
   uint8_t area = (hi >> 6) & 0x03;
   uint8_t pat_hi = (hi >> 5) & 0x01;
   uint8_t bit3 = (hi >> 3) & 0x01;

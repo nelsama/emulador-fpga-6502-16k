@@ -877,19 +877,25 @@ porque hay zonas que el programa **no** posee:
 | Tilemap y atributos (2048 celdas) | a cero |
 | Patrones **fondo** 0–7 | 8 tiles de demo |
 | Patrones **fondo** `$20`–`$7F` | **fuente ASCII** (se expande de 1bpp a 2bpp) |
-| Patrones **sprite 0–2** | **reservados**: cara, rombo y X |
-| Patrones **sprite 3–63** | libres (a cero) |
+| Patrones **sprite 0–2** | formas de demo: cara, rombo y X |
+| Patrones **sprite 3–63** | a cero |
 | Paleta | los valores por defecto del manual §4 |
 
 Un `setup` por `$D816` limpia tilemap, atributos, fondo 0–7 y **sprite 0–2**, y
-vuelve a expandir la fuente. Los patrones de sprite **3–63 no los toca nadie
-excepto el programa**.
+vuelve a expandir la fuente.
 
-> **Por qué importa:** si un programa dibuja su arte en el patrón **0, 1 o 2**,
-en la placa verá la cara/rombo/X en vez de su dibujo, aunque en el emulador
-funcione. El rango seguro es **3–63**. El emulador reproduce ese estado inicial
-(`load_demo_sprite_patterns()`), y `make test` lo comprueba.
-
+> **Los patrones 0–2 no están reservados.** Los 64 (0–63) son utilizables: la
+> única condición es **no asumir que 0–2 arrancan vacíos**. Si quieres usarlos,
+> escríbelos con tu arte como cualquier otro. Un juego que carga todos sus
+> patrones al arrancar puede usar el rango completo sin problemas.
+>
+> **Espera `VIDEO_READY`** (bit 4 de `$D803`) antes de escribir: durante el
+> arranque y mientras dure un setup `$D816` (`BUSY` a 1) el core **ignora** las
+> escrituras del CPU a la VRAM. El emulador reproduce ese bloqueo.
+>
+> Los **tiles de fondo 0–7** tienen el mismo caso: vienen con texturas de demo y
+> se sobrescriben igual.
+>
 > **La cara que aparece arriba a la izquierda al arrancar es normal.** El OAM
 > arranca a cero, así que el sprite 0 queda en (0,0) con `Y=0 < 248` (activo) y
 > el patrón 0, que es la cara. En un monitor real puede **no verse**, porque el

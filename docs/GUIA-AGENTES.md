@@ -352,11 +352,19 @@ primero esto.
 | Tilemap y atributos | a cero |
 | Patrones de **fondo** 0–7 | 8 tiles de demo |
 | Patrones de **fondo** `$20`–`$7F` | **fuente ASCII** |
-| Patrones de **sprite 0–2** | **reservados**: cara, rombo y X |
-| Patrones de **sprite 3–63** | libres |
+| Patrones de **sprite 0–2** | formas de demo: cara, rombo y X |
+| Patrones de **sprite 3–63** | a cero |
 
 Un setup (`$D816`) limpia tilemap, atributos, fondo 0–7 y sprite 0–2, y
-reexpande la fuente. **El rango seguro para el arte de sprite es 3–63.**
+reexpande la fuente.
+
+> **Los patrones 0–2 no están reservados.** Los 64 (0–63) son utilizables; solo
+> hay que **escribirlos** en vez de asumir que arrancan vacíos. Igual pasa con
+> los **tiles de fondo 0–7**.
+>
+> **Espera `VIDEO_READY`** (bit 4 de `$D803`) antes de escribir: durante el
+> arranque y mientras dure un setup `$D816` el core **ignora** las escrituras del
+> CPU a la VRAM.
 
 > La **cara** que se ve arriba a la izquierda al arrancar viene de ahí: el OAM
 > empieza a cero y el sprite 0 queda en (0,0) con el patrón 0. En un monitor

@@ -95,6 +95,9 @@ private:
   uint8_t pal_ptr_ = 0;      // $D813
   uint8_t pal_buf_lo_ = 0;   // $D814 (buffer)
   uint8_t setup_busy_ = 0;   // $D817 bit0 (estado setup)
+  // Setup pedido por $D816 pero aun no aplicado: el core lo ejecuta mientras
+  // dura el BUSY, y hasta terminarlo ignora las escrituras del CPU.
+  bool    setup_pendiente_ = false;
 
   // VRAM
   std::array<uint8_t, 2048> tilemap_{}; // área 00
@@ -126,5 +129,6 @@ private:
   void load_sprite_pattern(int patron, const uint8_t* p0, const uint8_t* p1);
   void load_demo_sprite_patterns();
   void clear_demo_sprite_patterns();
+  void aplicar_setup();
   void render_tile_row(uint32_t* out, int band, int src_y, int scroll_x, int scroll_y);
 };
