@@ -103,10 +103,32 @@ static void test_barrido() {
   check(visible, "barrido: aparece zona visible");
 }
 
+// Estado inicial del ARRANQUE: el OAM está a cero, así que el sprite 0 queda
+// en (0,0) con el patrón 0 (la cara) y el bit Y<248 lo da por activo.
+//
+// Es fiel al core: oam_reg arranca a cero (video_core.vhd:311) y el criterio
+// de descarte es sy < 248. Por eso al encender se ve una cara arriba a la
+// izquierda, en la placa y en el emulador. Si algún día se "limpia" el OAM al
+// arrancar, esto deja de coincidir con el hardware.
+static void test_arranque_muestra_cara() {
+  Video v;
+  const auto& oam = v.oam();
+  bool todo_cero = true;
+  for (uint8_t b : oam)
+    if (b != 0) todo_cero = false;
+  check(todo_cero, "arranque: el OAM empieza a cero");
+
+  // Y=0 < 248 => el sprite 0 está habilitado.
+  check(oam[1] < 248, "arranque: el sprite 0 está habilitado");
+  // Y su patrón (0) es la cara, no un patrón vacío.
+  check(v.sprite_patterns()[0 * 16 + 0] == 0x3C, "arranque: el patrón 0 es la cara");
+}
+
 int main() {
   std::printf("test_video: Core de Video\n");
   test_paleta_satura();
   test_patrones_demo();
+  test_arranque_muestra_cara();
   test_barrido();
   if (fallos) {
     std::printf("test_video: %d FALLOS\n", fallos);

@@ -358,6 +358,11 @@ primero esto.
 Un setup (`$D816`) limpia tilemap, atributos, fondo 0–7 y sprite 0–2, y
 reexpande la fuente. **El rango seguro para el arte de sprite es 3–63.**
 
+> La **cara** que se ve arriba a la izquierda al arrancar viene de ahí: el OAM
+> empieza a cero y el sprite 0 queda en (0,0) con el patrón 0. En un monitor
+> real puede quedar recortada por overscan (fila 0). No es un fallo del
+> emulador.
+
 El puntero de paleta (`$D813`/`$D815`) **satura en 31**: tras escribir la
 entrada 31 se queda ahí, no vuelve a 0. Para reiniciar hay que recargar `$D813`.
 

@@ -890,6 +890,14 @@ en la placa verá la cara/rombo/X en vez de su dibujo, aunque en el emulador
 funcione. El rango seguro es **3–63**. El emulador reproduce ese estado inicial
 (`load_demo_sprite_patterns()`), y `make test` lo comprueba.
 
+> **La cara que aparece arriba a la izquierda al arrancar es normal.** El OAM
+> arranca a cero, así que el sprite 0 queda en (0,0) con `Y=0 < 248` (activo) y
+> el patrón 0, que es la cara. En un monitor real puede **no verse**, porque el
+> overscan recorta la fila 0 (ver `08-TIPS-DESARROLLO.md` §1.9 del proyecto del
+> FPGA). Es una diferencia de visualización, no de emulación: la ventana y
+> `/screen.png` muestran los 320×240 completos, sin recorte. Desaparece en cuanto
+> un programa hace `setup_video()` o escribe el OAM.
+
 #### Puntero de paleta: satura en 31
 
 `$D813` fija el puntero y `$D815` escribe la entrada y lo incrementa. El
