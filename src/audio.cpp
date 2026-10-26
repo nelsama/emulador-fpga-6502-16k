@@ -36,6 +36,8 @@ bool AudioOutput::start(int freq, int buffer_ms) {
   ring_.assign(size_, 0);
   head_ = tail_ = fill_ = 0;
   underruns_ = 0;
+  underrun_samples_ = 0;
+  underflow_active_ = false;
   overdrops_ = 0;
 
 #ifdef HAVE_SDL2
@@ -181,11 +183,19 @@ void AudioOutput::pull(int16_t* out, int count) {
   for (int i = 0; i < count; i++) {
     if (fill_ == 0) {
       out[i] = 0; // silencio si no hay datos
-      underruns_++;
+      underrun_samples_++;
+      // Un episodio = un tramo continuo sin datos. Contar cada muestra daba
+      // cifras enormes (un hueco de 1024 muestras sumaba 1024) que no se
+      // correspondían con lo que se oye y tapaban el dato real.
+      if (!underflow_active_) {
+        underruns_++;
+        underflow_active_ = true;
+      }
     } else {
       out[i] = ring_[head_];
       head_ = (head_ + 1) % size_;
       fill_--;
+      underflow_active_ = false;
     }
   }
 }

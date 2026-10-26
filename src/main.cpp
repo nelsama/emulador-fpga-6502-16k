@@ -10,12 +10,16 @@
 //     tarjeta.img : imagen de tarjeta SD (se crea formateada si no existe)
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <mutex>
+#include <queue>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -401,6 +405,41 @@ int main(int argc, char** argv) {
   unsigned long last_underruns_ = 0;
   const bool verbose_ = std::getenv("EMU_TRACE") != nullptr;
 
+  // Cola de informes de diagnóstico.
+  //
+  // El bucle principal solo encola (una petición cada 5 s) y este hilo hace el
+  // write. Imprimir desde el bucle bloqueaba ~100 ms cuando stderr va a un
+  // fichero, y como el informe sale cada 5 s el propio diagnóstico metía
+  // tirones periódicos en la emulación.
+  std::mutex traza_mtx;
+  std::queue<std::string> traza_pend;
+  std::atomic<bool> traza_fin{false};
+  std::thread traza_hilo;
+  if (verbose_) {
+    traza_hilo = std::thread([&] {
+      for (;;) {
+        std::string linea;
+        bool vacia = false;
+        {
+          std::lock_guard<std::mutex> lk(traza_mtx);
+          if (!traza_pend.empty()) {
+            linea = std::move(traza_pend.front());
+            traza_pend.pop();
+          } else {
+            vacia = true;
+          }
+        }
+        if (linea.empty()) {
+          if (vacia && traza_fin.load()) break;
+          std::this_thread::sleep_for(std::chrono::milliseconds(20));
+          continue;
+        }
+        std::fputs(linea.c_str(), stderr);
+        std::fflush(stderr);
+      }
+    });
+  }
+
   // El servidor de depuración se atiende a 50 Hz, no en cada vuelta del bucle.
   // El bucle da ~20 000 vueltas por segundo (duerme 50 us cuando va al día), y
   // llamar a poll() en todas ellas acababa desbordando la pila del proceso al
@@ -645,12 +684,26 @@ int main(int argc, char** argv) {
                              audio.underruns() != last_underruns_ ||
                              fill_ms > AUDIO_TARGET_MS * 2.0;
         if (anomaly && verbose_) {
-          std::fprintf(stderr,
-                       "EMU: %.2f MHz | audio: colchon=%.1f ms (max %.1f) + periodo=%.1f ms -> latencia ~%.1f ms | underrun=%lu | bucle=%.1f poll=%.1f cpu=%.1f aud=%.1f dibujo=%.1f (render=%.1f present=%.1f) hueco=%.1f@%.1fs\n",
-                       mhz, fill_ms, max_fill * 1000.0 / audio.frequency(), period_ms,
-                       fill_ms + period_ms, audio.underruns(), worst_loop_ms, worst_poll_ms,
-                       worst_cpu_ms, worst_aud_ms, worst_draw_ms, worst_render_ms,
-                       worst_present_ms, worst_gap_ms, worst_gap_at);
+          // El informe se ENCOLA en vez de imprimirse aquí dentro.
+          //
+          // Antes se hacía fprintf() directamente en esta vuelta del bucle, y
+          // con stderr redirigido a fichero el write bloquea el hilo del
+          // emulador ~100 ms. Ocurría justo cada 5 s, que es el periodo de este
+          // informe: el diagnóstico introducía los tirones que intentaba medir.
+          // El hilo de abajo los vuelca sin tocar el camino crítico.
+          char linea[512];
+          const int n = std::snprintf(
+              linea, sizeof(linea),
+              "EMU: %.2f MHz | audio: colchon=%.1f ms (max %.1f) + periodo=%.1f ms -> latencia ~%.1f ms | underrun=%lu (%lu muestras) | bucle=%.1f poll=%.1f cpu=%.1f aud=%.1f dibujo=%.1f (render=%.1f present=%.1f) hueco=%.1f@%.1fs\n",
+              mhz, fill_ms, max_fill * 1000.0 / audio.frequency(), period_ms,
+              fill_ms + period_ms, audio.underruns(), audio.underrun_samples(),
+              worst_loop_ms, worst_poll_ms, worst_cpu_ms, worst_aud_ms,
+              worst_draw_ms, worst_render_ms, worst_present_ms, worst_gap_ms,
+              worst_gap_at);
+          if (n > 0) {
+            std::lock_guard<std::mutex> lk(traza_mtx);
+            traza_pend.push(std::string(linea, (size_t)std::min(n, (int)sizeof(linea) - 1)));
+          }
         }
         last_underruns_ = audio.underruns();
         sum_fill = 0.0;
@@ -666,5 +719,11 @@ int main(int argc, char** argv) {
   }
 
   delete[] framebuffer;
+  // Cerrar el hilo de diagnóstico: primero se le avisa y se espera a que vuelque
+  // lo que quede en la cola.
+  if (traza_hilo.joinable()) {
+    traza_fin.store(true);
+    traza_hilo.join();
+  }
   return 0;
 }

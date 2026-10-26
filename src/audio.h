@@ -32,9 +32,13 @@ public:
   // Muestras que entrega el dispositivo por callback (latencia mínima).
   int callback_samples() const { return callback_samples_; }
 
-  // Estadísticas para diagnosticar tirones: muestras que faltaron (silencios
-  // por buffer vacío) y que se descartaron (buffer lleno).
+  // Estadísticas para diagnosticar tirones. Se cuentan las VECES que el anillo
+  // se quedó sin datos (episodios), no las muestras de silencio: un solo hueco
+  // de un callback son 1024 muestras y contarlas una a una da magnitudes
+  // absurdas (decenas de miles) que no se corresponden con lo que se oye.
   unsigned long underruns() const { return underruns_; }
+  // Muestras de silencio totales que provocaron esos episodios.
+  unsigned long underrun_samples() const { return underrun_samples_; }
   unsigned long overdrops() const { return overdrops_; }
   size_t fill() const { return fill_; }
 
@@ -49,8 +53,11 @@ private:
   int callback_samples_ = 0; // muestras por callback del dispositivo
   bool active_ = false;
   void* dev_ = nullptr; // SDL_AudioDeviceID
-  unsigned long underruns_ = 0;
+  unsigned long underruns_ = 0;         // episodios (tramos sin datos)
+  unsigned long underrun_samples_ = 0;  // muestras de silencio acumuladas
   unsigned long overdrops_ = 0;
+  // Dentro de un tramo de silencio: para no contar cada muestra como episodio.
+  bool underflow_active_ = false;
 
   static void sdl_callback(void* userdata, uint8_t* stream, int len);
 };
