@@ -21,6 +21,44 @@ void Video::load_default_font() {
   }
 }
 
+// Patrones de SPRITE 0..2 que graba la secuencia de inicializacion del core
+// (video_core.vhd, fase 3). Copiados del RTL: plano 0 = p0, plano 1 = p1.
+namespace {
+const uint8_t kDemoCaraP0[8] = {0x3C, 0x7E, 0xFF, 0xDB, 0xFF, 0x81, 0x7E, 0x3C};
+const uint8_t kDemoCaraP1[8] = {0x00, 0x00, 0x00, 0x24, 0x00, 0x7E, 0x00, 0x00};
+const uint8_t kDemoRomboP0[8] = {0x18, 0x3C, 0x7E, 0xFF, 0x7E, 0x7E, 0x3C, 0x18};
+const uint8_t kDemoRomboP1[8] = {0x00, 0x00, 0x00, 0x00, 0x81, 0x00, 0x00, 0x00};
+const uint8_t kDemoXP0[8] = {0x81, 0xC3, 0x66, 0x3C, 0x3C, 0x66, 0xC3, 0x81};
+const uint8_t kDemoXP1[8] = {0x00, 0x00, 0x00, 0xC3, 0xC3, 0x00, 0x00, 0x00};
+} // namespace
+
+// Carga un patron de sprite de 8x8 (dos planos de 8 bytes).
+void Video::load_sprite_pattern(int patron, const uint8_t* p0, const uint8_t* p1) {
+  for (int row = 0; row < 8; row++) {
+    sppat_[patron * 16 + row * 2] = p0[row];
+    sppat_[patron * 16 + row * 2 + 1] = p1[row];
+  }
+}
+
+// Estado de la VRAM tras la inicializacion del core: los patrones de sprite
+// 0, 1 y 2 tienen las formas de demo (cara, rombo, X).
+//
+// En hardware esos patrones NO estan libres: el arranque los escribe y, tras un
+// setup ($D816), los deja a cero. Un programa que use el patron 0 ve una cara
+// en la placa aunque en el emulador cargara su propio dibujo. El rango libre
+// para el arte del programa es 3..63.
+void Video::load_demo_sprite_patterns() {
+  load_sprite_pattern(0, kDemoCaraP0, kDemoCaraP1);
+  load_sprite_pattern(1, kDemoRomboP0, kDemoRomboP1);
+  load_sprite_pattern(2, kDemoXP0, kDemoXP1);
+}
+
+// El setup ($D816) deja los patrones 0..2 a cero (fase 3 con setup_latch=1).
+void Video::clear_demo_sprite_patterns() {
+  for (int patron = 0; patron <= 2; patron++)
+    for (int i = 0; i < 16; i++) sppat_[patron * 16 + i] = 0;
+}
+
 Video::Video() {
   default_palette();
   // STATUS arranca con VIDEO_READY (bit 4) activo: el setup de hardware ya
@@ -30,6 +68,8 @@ Video::Video() {
   // Al arrancar, el FPGA carga la fuente C64 en los patrones ASCII. Sin esto
   // los juegos que escriben texto no muestran nada.
   load_default_font();
+  // Y las formas de demo en los patrones de sprite 0..2 (fase 3 del init).
+  load_demo_sprite_patterns();
 }
 
 bool Video::decodes(uint16_t addr) const {
@@ -70,10 +110,30 @@ void Video::write(uint16_t addr, uint8_t data, bool& resp) {
     case 0xD815: {
       uint16_t rgb = pal_buf_lo_ | ((uint16_t)(data & 0x0F) << 8);
       pal_[pal_ptr_] = rgb;
-      pal_ptr_ = (pal_ptr_ + 1) & 0x1F;
+      // El auto-incremento SATURA en 31, como el hardware (video_bus.vhd:
+      // "if pal_ptr_r /= 11111" -> no incrementa). Envolver a 0 hacía que la
+      // entrada 31 fuese inalcanzable y que la escritura siguiente pisara
+      // pal_bg(0), que es el color de fondo global (BG_COLOR).
+      if (pal_ptr_ != 31) pal_ptr_++;
       break;
     }
-    case 0xD816: setup_busy_ = 0x01; break; // dispara setup (simplificado)
+    case 0xD816: {
+      // SETUP por hardware: el core limpia tilemap, atributos, patrones de
+      // fondo 0..7 y patrones de sprite 0..2, y re-expande la fuente ASCII
+      // (video_core.vhd, fases 0..4 con setup_latch=1). Aqui se reproducen los
+      // efectos visibles; el temporizado (BUSY -> VIDEO_READY) lo hace
+      // tick_frame(), igual que antes.
+      setup_busy_ = 0x01;
+      tilemap_.fill(0);
+      attrib_.fill(0);
+      // Fondo 0..7: el setup escribe ceros.
+      for (int i = 0; i < 8 * 16; i++) fgpat_[i] = 0;
+      // Sprites 0..2: tambien ceros (fase 3 con setup_latch).
+      clear_demo_sprite_patterns();
+      // Fase 4: la fuente SI se re-expande (la escribe de nuevo).
+      load_default_font();
+      break;
+    }
     default: resp = false; break;
   }
 }

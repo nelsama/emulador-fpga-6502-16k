@@ -66,6 +66,12 @@ public:
   const std::array<uint8_t, 2048>& tilemap()   const { return tilemap_; }
   const std::array<uint8_t, 2048>& attrib()    const { return attrib_; }
   const std::array<uint8_t, 160>&   oam()      const { return oam_; }
+  // Patrones y paleta: solo para verificar el estado inicial frente al RTL
+  // (pruebas y depuracion).
+  const std::array<uint8_t, 256 * 8 * 2>& bg_patterns()    const { return fgpat_; }
+  const std::array<uint8_t, 64 * 8 * 2>&  sprite_patterns() const { return sppat_; }
+  const std::array<uint16_t, 32>&         palette()        const { return pal_; }
+  uint8_t palette_ptr() const { return pal_ptr_; }
 
 private:
   // Barrido: última línea simulada desde el arranque (para sync_scanlines).
@@ -116,5 +122,9 @@ private:
   // Funciones de color sobre una paleta dada (no sobre pal_).
   uint32_t rgb444_to_rgba(uint16_t rgb444) const;
   void load_default_font();
+  // Patrones de sprite 0..2: los escribe la fase 3 del init del core.
+  void load_sprite_pattern(int patron, const uint8_t* p0, const uint8_t* p1);
+  void load_demo_sprite_patterns();
+  void clear_demo_sprite_patterns();
   void render_tile_row(uint32_t* out, int band, int src_y, int scroll_x, int scroll_y);
 };

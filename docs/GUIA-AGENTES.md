@@ -341,6 +341,28 @@ la tarjeta o el nombre del fichero: **no es el código**.
 
 ---
 
+## 6b. VRAM: estado inicial y zonas reservadas
+
+Lo que el emulador deja en la VRAM al arrancar **no es todo cero**, y hay partes
+que el programa no posee. Si tu arte se ve bien aquí y mal en la placa, mira
+primero esto.
+
+| Zona | Tras el arranque |
+|---|---|
+| Tilemap y atributos | a cero |
+| Patrones de **fondo** 0–7 | 8 tiles de demo |
+| Patrones de **fondo** `$20`–`$7F` | **fuente ASCII** |
+| Patrones de **sprite 0–2** | **reservados**: cara, rombo y X |
+| Patrones de **sprite 3–63** | libres |
+
+Un setup (`$D816`) limpia tilemap, atributos, fondo 0–7 y sprite 0–2, y
+reexpande la fuente. **El rango seguro para el arte de sprite es 3–63.**
+
+El puntero de paleta (`$D813`/`$D815`) **satura en 31**: tras escribir la
+entrada 31 se queda ahí, no vuelve a 0. Para reiniciar hay que recargar `$D813`.
+
+---
+
 ## 7. Formatos de la consola
 
 - `/console.txt`: **24 líneas de 80 bytes + `\n` cada una, siempre en CP437**.

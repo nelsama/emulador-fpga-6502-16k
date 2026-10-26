@@ -867,6 +867,54 @@ El frame resultante se guarda en `Video::last_frame()` y es lo que sirve
 CPU haya tocado la VRAM entre medias. Para el estado actual de la memoria está
 `/vram.txt`.
 
+#### Estado inicial de la VRAM (y qué está reservado)
+
+Al arrancar, el core deja la VRAM en un estado **concreto** que conviene conocer,
+porque hay zonas que el programa **no** posee:
+
+| Zona | Estado tras el arranque |
+|---|---|
+| Tilemap y atributos (2048 celdas) | a cero |
+| Patrones **fondo** 0–7 | 8 tiles de demo |
+| Patrones **fondo** `$20`–`$7F` | **fuente ASCII** (se expande de 1bpp a 2bpp) |
+| Patrones **sprite 0–2** | **reservados**: cara, rombo y X |
+| Patrones **sprite 3–63** | libres (a cero) |
+| Paleta | los valores por defecto del manual §4 |
+
+Un `setup` por `$D816` limpia tilemap, atributos, fondo 0–7 y **sprite 0–2**, y
+vuelve a expandir la fuente. Los patrones de sprite **3–63 no los toca nadie
+excepto el programa**.
+
+> **Por qué importa:** si un programa dibuja su arte en el patrón **0, 1 o 2**,
+en la placa verá la cara/rombo/X en vez de su dibujo, aunque en el emulador
+funcione. El rango seguro es **3–63**. El emulador reproduce ese estado inicial
+(`load_demo_sprite_patterns()`), y `make test` lo comprueba.
+
+#### Puntero de paleta: satura en 31
+
+`$D813` fija el puntero y `$D815` escribe la entrada y lo incrementa. El
+incremento **satura en 31**, como el `video_bus.vhd`: tras escribir la entrada
+31, el puntero se queda ahí y reescribir no toca otra. Para volver al principio
+hay que recargar `$D813`.
+
+Antes el emulador envolvía a 0, lo que hacía la entrada **31 inalcanzable** y
+que la escritura siguiente pisara `pal_bg(0)` (la entrada 0 del banco de fondo).
+Si un programa escribía las 32 entradas, el fondo cambiaba en el emulador y no
+en la placa.
+
+> **Diferencia teórica conocida:** el hardware detecta la escritura de `$D815`
+> por flanco (`pal_active`), así que necesita un ciclo con la señal baja entre
+> dos escrituras. Con `clk_sys` a 6,75 MHz y un `STA` de 4 ciclos siempre hay
+> margen, y el emulador escribe en todas. No se modela porque no hay evidencia
+> de que un programa real escriba `$D815` en ciclos consecutivos.
+
+#### `SCALE2X` duplica, no compone cuadrantes
+
+El bit 4 de `FLAGS` dibuja el sprite a 16×16 **leyendo un único patrón**: cada
+fila y columna sale dos veces. No lee `TILE+1/+2/+3`, así que no sirve para
+armar un dibujo de 16×16 con cuatro patrones distintos; para eso se usan cuatro
+sprites de 8×8. El emulador hace lo mismo.
+
 #### Detalles que confunden al programar
 
 1. **La fuente solo dibuja `$20-$7F`.** No hay caracteres de bloque (`╔═║▓`):
