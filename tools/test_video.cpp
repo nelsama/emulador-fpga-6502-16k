@@ -163,12 +163,17 @@ static void limpiar_oam(Video& v) {
 // Deja SOLO el sprite 0 donde importa y aparta los otros 31.
 //
 // Y >= 248 desactiva el DIBUJADO, pero el barrido de colisión recorre los 32
-// sprites igual (el RTL no filtra por Y). Por eso los sobrantes se llevan a
-// X=304 (celda 38), lejos de las celdas que usan los tests (0, 1, 1984), con
-// COLL_POINT 0 para que su punto quede dentro de esa celda.
+// sprites igual (el RTL no filtra por Y). Por eso los sobrantes se llevan a la
+// celda (38,0) con COLL_POINT 0, lejos de las celdas que usan los tests.
+//
+// Ojo con la X: es de 9 bits y el byte 8 va en FLAGS bit 2 (X_bit8). Poner 304
+// sin ese bit deja X = 48 (304 & 0xFF), que es otra celda.
 static void solo_sprite_0(Video& v) {
   limpiar_oam(v);
-  for (int i = 1; i < 32; i++) poner_sprite(v, i, 304, 0, 0, 0, 0x00);
+  const int x = 38 * 8; // celda 38
+  const int flags_x8 = (x > 255) ? 0x04 : 0x00;
+  for (int i = 1; i < 32; i++)
+    poner_sprite(v, i, x & 0xFF, 0, 0, flags_x8, 0x00);
 }
 
 // Deja la VRAM de atributos a cero para que un bloque no arrastre las celdas
@@ -260,12 +265,53 @@ static void test_solid_hit() {
   check(solid_hit(v), "solid: sin 2x el mismo punto cae en la celda 0");
 }
 
+// El barrido de colisión pasa el punto a coordenadas de MUNDO sumando el
+// scroll (cc645d3), para leer la misma celda que se ve bajo el sprite.
+static void test_solid_hit_scroll() {
+  Video v;
+  bool resp = false;
+
+  // Con scroll 0 el sprite en (0,0) toca la celda (0,0).
+  solo_sprite_0(v);
+  limpiar_atributos(v);
+  poner_solido(v, 0, 0, true);
+  poner_sprite(v, 0, 0, 0, 0, 0x00, 0x00);
+  entrar_en_blanking(v);
+  check(solid_hit(v), "scroll: sin scroll, toca la celda 0");
+
+  // Con scroll_x = 8 el mismo sprite mira la celda (1,0), así que la 0 ya no
+  // cuenta. Se usan 8 px = una celda exacta para que no haya ambigüedad.
+  v.write(0xD804, 8, resp); // scroll_x lo
+  v.write(0xD805, 0, resp); // scroll_x hi
+  entrar_en_blanking(v);
+  check(!solid_hit(v), "scroll: con scroll_x=8 la celda 0 deja de contar");
+
+  poner_solido(v, 0, 0, false);
+  poner_solido(v, 1, 0, true);
+  entrar_en_blanking(v);
+  check(solid_hit(v), "scroll: con scroll_x=8 toca la celda 1");
+
+  // Scroll vertical: 8 px baja una fila. El sprite 0 usa COLL_POINT $00, así
+  // que su punto es (0,0); con scroll_y=8 pasa a (0,8) -> columna 0, fila 1,
+  // que es la celda 64 (no la 65: la columna no se mueve).
+  v.write(0xD804, 0, resp);
+  v.write(0xD806, 8, resp); // scroll_y lo
+  v.write(0xD807, 0, resp);
+  entrar_en_blanking(v);
+  check(!solid_hit(v), "scroll: scroll_y=8 ya no mira la fila 0");
+  poner_solido(v, 1, 0, false);
+  poner_solido(v, 0, 1, true);
+  entrar_en_blanking(v);
+  check(solid_hit(v), "scroll: scroll_y=8 mira la fila 1");
+}
+
 int main() {
   std::printf("test_video: Core de Video\n");
   test_paleta_satura();
   test_patrones_demo();
   test_arranque_muestra_cara();
   test_solid_hit();
+  test_solid_hit_scroll();
   test_barrido();
   if (fallos) {
     std::printf("test_video: %d FALLOS\n", fallos);

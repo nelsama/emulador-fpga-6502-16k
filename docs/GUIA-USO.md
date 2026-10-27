@@ -985,16 +985,22 @@ Detalles que conviene conocer porque no son evidentes:
 |---|---|
 | **`COLL_POINT`** (byte +4) | Elige qué píxel del sprite se comprueba: `bits 2:0` = dx, `bits 5:3` = dy (0–7) |
 | **`SCALE2X` escala el punto** | Con el sprite a 2×, `dx`/`dy` se duplican (y `7` pasa a `15`, no a `14`) |
+| **Se aplica el scroll** | El punto se pasa a coordenadas de mundo antes de leer la celda (`cc645d3`) |
 | **`Y ≥ 248` no excluye** | Desactiva el **dibujado**, pero el barrido recorre los 32 sprites igual |
-| **Sin scroll** | Usa la celda directa de pantalla, no la del mapa desplazado |
 | **No es sticky** | Se recalcula entero cada frame; `clear_stats` existe en el RTL pero no se usa |
+
+> **Con scroll**, la celda que se lee es la misma que se ve bajo el sprite:
+> `celda = ((punto_x + scroll_x)/8 mod 64) + ((punto_y + scroll_y)/8 mod 32)*64`.
+> El scroll usado es el de la banda activa; en el blanking es el de la banda
+> **superior** si hay split, o el normal si no lo hay.
 
 > Ejemplo: `COLL_POINT = $24` es el centro (4,4); `$3C` el pie (4,7); `$27` el
 > borde derecho (7,4). Para que la colisión avise **antes** de incrustarse en
 > una pared, pon el punto en el borde que avanza.
 
 El emulador lo reproduce en `Video::barrido_colision()`, y `make test` cubre el
-punto de colisión, el escalado 2× y el caso de sprites deshabilitados.
+punto de colisión, el escalado 2×, el scroll, y el caso de sprites
+deshabilitados.
 
 #### `SCALE2X` duplica, no compone cuadrantes
 

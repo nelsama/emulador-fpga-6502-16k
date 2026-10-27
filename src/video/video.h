@@ -101,7 +101,11 @@ private:
   // SOLID_HIT ($D803 bit 5): algún sprite toca una celda con el bit 4 del
   // atributo. Se recalcula entero al entrar en cada blanking.
   bool    solid_hit_ = false;
-  bool    vblank_previo_ = true; // para detectar el flanco de entrada
+  // El barrido aún no se ha hecho, así que el primer tick SIEMPRE debe
+  // ejecutarlo: el contador interno arranca fuera del blanking (status $10),
+  // no dentro. Poner esto a false hace que el primer flanco cuente; el test
+  // `test_solid_hit` lo cubre.
+  bool    vblank_previo_ = false;
 
   // VRAM
   std::array<uint8_t, 2048> tilemap_{}; // área 00

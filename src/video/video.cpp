@@ -165,8 +165,11 @@ void Video::tick_frame() {
   const bool vblank = (line >= V_VISIBLE);
   // Bit 5 (SOLID_HIT) se calcula al ENTRAR en el blanking, que es cuando el
   // hardware hace el barrido (video_core.vhd: el proceso espera
-  // "v_cnt = V_VISIBLE and h_cnt = 0"). Debe hacerse ANTES de componer el
-  // registro para que ya refleje el frame que empieza.
+  // "v_cnt = V_VISIBLE and h_cnt = 0").
+  //
+  // OJO con el estado inicial: el contador arranca EN blanking (line =
+  // V_VISIBLE), asi que en la primera llamada vblank_previo_ debe valer true o
+  // el primer frame se perderia sin barrer.
   if (vblank && !vblank_previo_) barrido_colision();
   vblank_previo_ = vblank;
 
@@ -187,7 +190,8 @@ void Video::tick_frame() {
 //
 // Para cada uno de los 32 sprites:
 //   punto = (X + dx, Y + dy), con dx/dy del COLL_POINT (byte +4 del OAM)
-//   celda = (punto_y / 8) * 64 + (punto_x / 8)
+//   mundo = punto + scroll
+//   celda = (mundo_y / 8 mod 32) * 64 + (mundo_x / 8 mod 64)
 // y si el bit 4 del atributo de esa celda está a 1, hay colisión.
 //
 // Detalles fieles al RTL que se ven en el código de abajo:
@@ -195,10 +199,29 @@ void Video::tick_frame() {
 //     dx,dy se multiplican por 2 (y 7 pasa a 15, no a 14).
 //   - NO se descartan los sprites con Y >= 248: el barrido recorre los 32
 //     siempre (a diferencia del dibujado, que sí los salta).
-//   - NO se aplica scroll: usa la celda directa de pantalla, no la del mapa.
+//   - SE APLICA SCROLL (cc645d3): el punto de pantalla se pasa a coordenadas de
+//     mundo para leer la misma celda que se ve bajo el sprite. Antes se usaba
+//     la posición de pantalla como si fuera de mundo, y con scroll activo
+//     colisionaba contra otra celda.
+//   - El scroll es el de la BANDA ACTIVA (scroll_x/scroll_y del RTL, que cambian
+//     al cruzar raster0/raster1). Como el barrido ocurre en el blanking, en la
+//     práctica es el de la última banda del frame.
 //   - El bit se recalcula entero cada frame: no es sticky
 //     (clear_stats está declarado en el RTL pero sin usar).
 void Video::barrido_colision() {
+  // El RTL lee scroll_x/scroll_y, que NO son los registros del CPU sino el
+  // scroll de la banda ACTIVA. Al final de cada frame (h_cnt = H_TOTAL-1 y
+  // v_cnt = V_TOTAL-1) se reasignan: si no hay split (rl0 = $FF) toman el
+  // scroll NORMAL; si hay split, el de la banda SUPERIOR (band2). El barrido
+  // ocurre en el blanking, justo despues de esa transicion, asi que ese es el
+  // valor que ve.
+  int scx = scroll_x_lo_ | ((scroll_x_hi_ & 0x07) << 8);
+  int scy = scroll_y_lo_ | ((scroll_y_hi_ & 0x07) << 8);
+  if (raster0_ != 0xFF) {
+    scx = band2_x_lo_ | ((band2_x_hi_ & 0x07) << 8);
+    scy = band2_y_lo_ | ((band2_y_hi_ & 0x07) << 8);
+  }
+
   bool hit = false;
   for (int i = 0; i < 32 && !hit; i++) {
     const int base = i * 5;
@@ -221,8 +244,11 @@ void Video::barrido_colision() {
     const int px = (ox + dx) & 0x1FF;
     const int py = (oy + dy) & 0xFF;
 
-    // Celda = y/8 * 64 + x/8, con x recortado a 6 bits y y a 5.
-    const int celda = ((py >> 3) & 0x1F) * MAP_W + ((px >> 3) & 0x3F);
+    // Paso a coordenadas de mundo (11 bits) y celda con módulo 64/32. El módulo
+    // absorbe el desbordamiento, así que ya no hace falta recortar antes.
+    const int wx = (px + scx) & 0x7FF;
+    const int wy = (py + scy) & 0x7FF;
+    const int celda = ((wy >> 3) & 0x1F) * MAP_W + ((wx >> 3) & 0x3F);
 
     if (attrib_[celda] & 0x10) hit = true; // bit 4 = SOLIDO
   }
