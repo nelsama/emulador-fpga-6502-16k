@@ -3,7 +3,13 @@
 **Desde:** proyecto EmuladorFpga6502
 **Para:** proyecto fpga-6502-16k
 **Fecha:** 2026-10-27
-**Referencia:** `fb1c5bc`, `895cb67`
+**Referencia:** `fb1c5bc`, `895cb67` → **resuelto en `3d760d8`**
+
+> **Estado: aplicado.** El commit `3d760d8` («Corrige los comentarios del core
+> de video») cubre los seis puntos de este informe. Es **solo documentación**:
+> ningún cambio de lógica en el RTL, así que el emulador sigue siendo fiel sin
+> modificar nada. Se conserva el informe como registro de lo que motivó el
+> cambio.
 
 ## Por qué este informe
 
