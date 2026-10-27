@@ -347,6 +347,49 @@ static void test_solid_hit_banda() {
   check(!solid_hit(v), "banda: la superior no se usa en el barrido");
 }
 
+// El scroll vertical del DIBUJADO y el de la COLISIÓN deben usar el mismo
+// ancho (11 bits, como y0_world del RTL). Envolver a 8 bits antes de dividir
+// da el mismo resultado porque 256 = 8 x 32, pero tener dos anchos distintos
+// para la misma operación solo invita a equivocarse al leer el código.
+//
+// Se comprueba dibujando con scroll_y alto: el frame no debe cambiar respecto
+// a dibujar con su equivalente módulo 256.
+static void test_scroll_vertical_ancho() {
+  Video a, b;
+  bool resp = false;
+
+  // Tilemap con una fila distinta en cada fila de celda, para que un desfase
+  // de fila se note.
+  for (int celda = 0; celda < 2048; celda++) {
+    a.write(0xD800, (uint8_t)(celda & 0xFF), resp);
+    a.write(0xD801, (uint8_t)(0x00 | ((celda >> 8) & 0x07)), resp); // area 00
+    a.write(0xD802, (uint8_t)((celda / Video::MAP_W) & 0xFF), resp);
+  }
+
+  // a) scroll_y = 260 ; b) scroll_y = 4 (260 & 0xFF). Deben dar el mismo frame.
+  a.write(0xD806, 260 & 0xFF, resp);
+  a.write(0xD807, 260 >> 8, resp);
+  b.write(0xD806, 4, resp);
+  b.write(0xD807, 0, resp);
+
+  const size_t n = (size_t)Video::W * Video::H;
+  std::vector<uint32_t> fa(n), fb(n);
+  a.render(fa.data());
+  b.render(fb.data());
+  check(fa == fb, "scroll_y: 260 y 4 dibujan lo mismo");
+
+  // Y con 2047 (máximo del registro): equivale a 2047 & 0xFF = 255.
+  Video c, d;
+  c.write(0xD806, 2047 & 0xFF, resp);
+  c.write(0xD807, 2047 >> 8, resp);
+  d.write(0xD806, 255, resp);
+  d.write(0xD807, 0, resp);
+  std::vector<uint32_t> fc(n), fd(n);
+  c.render(fc.data());
+  d.render(fd.data());
+  check(fc == fd, "scroll_y: 2047 y 255 dibujan lo mismo");
+}
+
 int main() {
   std::printf("test_video: Core de Video\n");
   test_paleta_satura();
@@ -355,6 +398,7 @@ int main() {
   test_solid_hit();
   test_solid_hit_scroll();
   test_solid_hit_banda();
+  test_scroll_vertical_ancho();
   test_barrido();
   if (fallos) {
     std::printf("test_video: %d FALLOS\n", fallos);

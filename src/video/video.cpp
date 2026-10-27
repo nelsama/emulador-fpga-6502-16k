@@ -442,12 +442,20 @@ void Video::render(uint32_t* out) {
       band_scroll_y = band3_y_lo_ | ((band3_y_hi_ & 0x07) << 8);
     }
 
-    int map_y = (py + band_scroll_y) & 0xFF; // envuelve módulo 256 (32 tiles × 8)
+    // Posición de mundo = pantalla + scroll, en 11 bits como el RTL
+    // (video_core.vhd: y0_world <= resize(y0_log,11) + scroll_y).
+    //
+    // El módulo a 11 bits y el de la celda (32 filas x 8 px = 256) son
+    // equivalentes: envolver antes a 256 o después da lo mismo, porque 256 es
+    // múltiplo de 8 y de 32. Se usa 11 bits para que esta ruta y la del barrido
+    // de colisión manejen el mismo ancho, en vez de diferir sin motivo.
+    int map_y = (py + band_scroll_y) & 0x7FF;
     int tile_row = (map_y / TILE_H) & (MAP_H - 1);
     int pix_y = map_y % TILE_H;
 
     for (int px = 0; px < W; px++) {
-      int map_x = (px + band_scroll_x) & 0x1FF; // envuelve módulo 512 (64 tiles × 8)
+      // 9 bits = 64 columnas x 8 px, igual que x0_world del RTL.
+      int map_x = (px + band_scroll_x) & 0x1FF;
       int tile_col = (map_x / TILE_W) & (MAP_W - 1);
       int pix_x = map_x % TILE_W;
 
