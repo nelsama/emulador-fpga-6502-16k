@@ -86,6 +86,16 @@ dist: $(BIN)
 	@if [ -f tarjeta.img ]; then cp -f tarjeta.img $(DIST)/; \
 	else echo "[!] sin tarjeta.img: el monitor arrancara sin SD"; fi
 	@cp -f run.bat run_debug.bat $(DIST)/ 2>/dev/null || true
+	@# Manual en HTML autocontenido (se abre con doble clic, sin conexion).
+	@# Si falta Python o el paquete markdown, se copia el .md tal cual.
+	@if command -v python >/dev/null 2>&1 && \
+	  python -c "import markdown" >/dev/null 2>&1; then \
+	  python tools/md2html.py docs/GUIA-USO.md $(DIST)/MANUAL.html \
+	    "Emulador FPGA 6502 - Manual de uso"; \
+	else \
+	  cp -f docs/GUIA-USO.md $(DIST)/MANUAL.md; \
+	  echo "[!] sin python+markdown: se copia MANUAL.md en vez de MANUAL.html"; \
+	fi
 	@# Sexta comprobacion: el .exe debe cargar sin MSYS2 en el PATH.
 	@$(MAKE) --no-print-directory dist-verificar
 

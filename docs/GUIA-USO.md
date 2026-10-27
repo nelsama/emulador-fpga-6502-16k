@@ -104,6 +104,7 @@ dist/
 ├── libstdc++-6.dll
 ├── libwinpthread-1.dll
 ├── tarjeta.img          (16 MB; si no existe, se avisa y se omite)
+├── MANUAL.html          manual de uso, listo para abrir con doble clic
 ├── run.bat
 ├── run_debug.bat
 └── rom/
@@ -112,6 +113,11 @@ dist/
 
 Son unos 22 MB, casi todo la tarjeta. Copia la carpeta tal cual: los `.bat`
 usan rutas relativas y `cd /d "%~dp0"`, así que funcionan desde cualquier sitio.
+
+`MANUAL.html` se genera a partir de `docs/GUIA-USO.md` con `tools/md2html.py`:
+un único fichero con el CSS embebido, que se abre en cualquier navegador sin
+conexión y sigue el tema claro u oscuro del sistema. Necesita Python 3 con el
+paquete `markdown`; si no está, se copia `MANUAL.md` y se avisa.
 
 `make dist` termina comprobando con `objdump` que el `.exe` no depende de
 ninguna DLL que no esté en `dist/`. Si falta alguna, lo dice y falla.
