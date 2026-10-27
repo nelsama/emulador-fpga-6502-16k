@@ -222,9 +222,10 @@ void Video::barrido_colision() {
   // INFERIOR si hay split, o el NORMAL si no lo hay. NO es la superior.
   //
   // Consecuencia (la misma que sufre el hardware): con split de raster, solo
-  // colisionan bien los sprites de esa última banda. Reproducirlo es lo
-  // correcto; arreglarlo de verdad requería guardar la banda por sprite en el
-  // line buffer, y eso es un cambio de core, no del emulador.
+  // colisionan bien los sprites de esa última banda. El motivo de fondo es que
+  // la señal de scroll es única: no hay un valor válido para los 32 sprites a
+  // la vez. Reproducirlo es lo correcto; arreglarlo de verdad requeriría
+  // guardar la banda por sprite en el line buffer (cambio de core).
   int scx = scroll_x_lo_ | ((scroll_x_hi_ & 0x07) << 8);
   int scy = scroll_y_lo_ | ((scroll_y_hi_ & 0x07) << 8);
   if (raster0_ != 0xFF) {

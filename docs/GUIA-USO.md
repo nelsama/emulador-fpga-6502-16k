@@ -999,11 +999,14 @@ Detalles que conviene conocer porque no son evidentes:
 > dibujada**: la **inferior** si está configurada, o el scroll normal si no hay
 > split.
 >
-> Consecuencia: **con split activo, solo colisionan bien los sprites de esa
-> última banda**. Los de las bandas superiores se comprueban contra la celda que
-> corresponde a otro scroll. El emulador reproduce ese comportamiento; no lo
-> corrige, porque hacerlo de verdad exige guardar la banda de cada sprite en el
-> line buffer (un cambio de core, no del emulador).
+> El motivo de fondo es que **no hay un scroll válido para los 32 sprites a la
+> vez**: la señal es única y el barrido los recorre todos con el mismo valor.
+> Con split activo, solo los sprites de esa última banda se comprueban contra la
+> celda correcta.
+>
+> **Recomendación:** no usar `SOLID_HIT` con split de raster. El emulador
+> reproduce el comportamiento del hardware; no lo corrige, porque hacerlo exige
+> guardar la banda de cada sprite en el line buffer (un cambio de core).
 
 > Ejemplo: `COLL_POINT = $24` es el centro (4,4); `$3C` el pie (4,7); `$27` el
 > borde derecho (7,4). Para que la colisión avise **antes** de incrustarse en
