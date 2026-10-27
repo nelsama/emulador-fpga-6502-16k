@@ -163,7 +163,14 @@ void Video::tick_frame() {
   if (++line >= H_LINES) line = 0;
 
   const bool vblank = (line >= V_VISIBLE);
-  status_ = (vblank ? 0x80 : 0x00) | 0x10; // VBLANK | VIDEO_READY
+  // Bit 5 (SOLID_HIT) se calcula al ENTRAR en el blanking, que es cuando el
+  // hardware hace el barrido (video_core.vhd: el proceso espera
+  // "v_cnt = V_VISIBLE and h_cnt = 0"). Debe hacerse ANTES de componer el
+  // registro para que ya refleje el frame que empieza.
+  if (vblank && !vblank_previo_) barrido_colision();
+  vblank_previo_ = vblank;
+
+  status_ = (vblank ? 0x80 : 0x00) | (solid_hit_ ? 0x20 : 0x00) | 0x10;
   if (setup_busy_ & 0x01) {
     // Fin del setup: ahora el core libera init_done y aplica el resultado.
     // Se hace AQUI y no al escribir $D816 para que las escrituras del CPU
@@ -174,6 +181,52 @@ void Video::tick_frame() {
     }
     setup_busy_ = 0x10; // VIDEO_READY tras el setup
   }
+}
+
+// Barrido de colisión sprite <-> tile sólido (video_core.vhd, fase de blanking).
+//
+// Para cada uno de los 32 sprites:
+//   punto = (X + dx, Y + dy), con dx/dy del COLL_POINT (byte +4 del OAM)
+//   celda = (punto_y / 8) * 64 + (punto_x / 8)
+// y si el bit 4 del atributo de esa celda está a 1, hay colisión.
+//
+// Detalles fieles al RTL que se ven en el código de abajo:
+//   - El byte COLL_POINT se IGNORA si SCALE2X está activo salvo para escalar:
+//     dx,dy se multiplican por 2 (y 7 pasa a 15, no a 14).
+//   - NO se descartan los sprites con Y >= 248: el barrido recorre los 32
+//     siempre (a diferencia del dibujado, que sí los salta).
+//   - NO se aplica scroll: usa la celda directa de pantalla, no la del mapa.
+//   - El bit se recalcula entero cada frame: no es sticky
+//     (clear_stats está declarado en el RTL pero sin usar).
+void Video::barrido_colision() {
+  bool hit = false;
+  for (int i = 0; i < 32 && !hit; i++) {
+    const int base = i * 5;
+    const uint8_t flags = oam_[base + 3];
+    const uint8_t control = oam_[base + 4];
+
+    const int ox = oam_[base + 0] | ((flags & 0x04) ? 0x100 : 0); // X de 9 bits
+    const int oy = oam_[base + 1];
+    const bool scale2x = (flags & 0x10) != 0;
+
+    int dx = control & 0x07;        // COLL_POINT: bits 2:0
+    int dy = (control >> 3) & 0x07; //             bits 5:3
+    if (scale2x) {
+      // En 2x el punto se escala con el sprite: 0..6 -> x2, 7 -> 15.
+      dx = (dx == 7) ? 15 : dx * 2;
+      dy = (dy == 7) ? 15 : dy * 2;
+    }
+
+    // Sumas con el ancho del hardware: X 9 bits, Y 8 bits (desbordan y vuelven).
+    const int px = (ox + dx) & 0x1FF;
+    const int py = (oy + dy) & 0xFF;
+
+    // Celda = y/8 * 64 + x/8, con x recortado a 6 bits y y a 5.
+    const int celda = ((py >> 3) & 0x1F) * MAP_W + ((px >> 3) & 0x3F);
+
+    if (attrib_[celda] & 0x10) hit = true; // bit 4 = SOLIDO
+  }
+  solid_hit_ = hit;
 }
 
 void Video::sync_scanlines(long long linea) {

@@ -98,6 +98,10 @@ private:
   // Setup pedido por $D816 pero aun no aplicado: el core lo ejecuta mientras
   // dura el BUSY, y hasta terminarlo ignora las escrituras del CPU.
   bool    setup_pendiente_ = false;
+  // SOLID_HIT ($D803 bit 5): algún sprite toca una celda con el bit 4 del
+  // atributo. Se recalcula entero al entrar en cada blanking.
+  bool    solid_hit_ = false;
+  bool    vblank_previo_ = true; // para detectar el flanco de entrada
 
   // VRAM
   std::array<uint8_t, 2048> tilemap_{}; // área 00
@@ -130,5 +134,6 @@ private:
   void load_demo_sprite_patterns();
   void clear_demo_sprite_patterns();
   void aplicar_setup();
+  void barrido_colision();
   void render_tile_row(uint32_t* out, int band, int src_y, int scroll_x, int scroll_y);
 };

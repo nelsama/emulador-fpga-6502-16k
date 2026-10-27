@@ -132,11 +132,140 @@ static void test_arranque_muestra_cara() {
   check(v.sprite_patterns()[0 * 16 + 0] == 0x3C, "arranque: el patrón 0 es la cara");
 }
 
+// Escribe un sprite completo en el OAM por el puerto indirecto.
+static void poner_sprite(Video& v, int n, int x, int y, int tile, int flags,
+                         int control) {
+  bool resp = false;
+  const int base = n * 5;
+  const uint8_t campos[5] = {(uint8_t)(x & 0xFF), (uint8_t)y, (uint8_t)tile,
+                             (uint8_t)flags, (uint8_t)control};
+  for (int k = 0; k < 5; k++) {
+    v.write(0xD800, (uint8_t)(base + k), resp);
+    v.write(0xD801, 0xC0, resp); // area 11 + OAM (bit3=0)
+    v.write(0xD802, campos[k], resp);
+  }
+}
+
+// Marca (o desmarca) una celda como sólida escribiendo su atributo.
+static void poner_solido(Video& v, int col, int fila, bool solido) {
+  bool resp = false;
+  const int celda = fila * Video::MAP_W + col;
+  v.write(0xD800, (uint8_t)(celda & 0xFF), resp);
+  v.write(0xD801, (uint8_t)(0x40 | ((celda >> 8) & 0x07)), resp); // area 01
+  v.write(0xD802, (uint8_t)(solido ? 0x14 : 0x04), resp);         // bit4 = SOLIDO
+}
+
+// Deshabilita los 32 sprites.
+static void limpiar_oam(Video& v) {
+  for (int i = 0; i < 32; i++) poner_sprite(v, i, 0, 248, 0, 0, 0x24);
+}
+
+// Deja SOLO el sprite 0 donde importa y aparta los otros 31.
+//
+// Y >= 248 desactiva el DIBUJADO, pero el barrido de colisión recorre los 32
+// sprites igual (el RTL no filtra por Y). Por eso los sobrantes se llevan a
+// X=304 (celda 38), lejos de las celdas que usan los tests (0, 1, 1984), con
+// COLL_POINT 0 para que su punto quede dentro de esa celda.
+static void solo_sprite_0(Video& v) {
+  limpiar_oam(v);
+  for (int i = 1; i < 32; i++) poner_sprite(v, i, 304, 0, 0, 0, 0x00);
+}
+
+// Deja la VRAM de atributos a cero para que un bloque no arrastre las celdas
+// sólidas que marcó el anterior.
+static void limpiar_atributos(Video& v) {
+  bool resp = false;
+  for (int celda = 0; celda < 2048; celda++) {
+    v.write(0xD800, (uint8_t)(celda & 0xFF), resp);
+    v.write(0xD801, (uint8_t)(0x40 | ((celda >> 8) & 0x07)), resp);
+    v.write(0xD802, 0x00, resp);
+  }
+}
+
+// Avanza hasta ENTRAR en el blanking, que es cuando se hace el barrido.
+// Garantiza cruzar un flanco: si ya estamos en blanking, sale primero a la
+// zona visible para que el siguiente tick_frame().
+static void entrar_en_blanking(Video& v) {
+  bool resp = false;
+  for (int i = 0; i < Video::H_LINES * 4; i++) {
+    const bool antes = (v.read(0xD803, resp) & 0x80) != 0;
+    v.tick_frame();
+    const bool ahora = (v.read(0xD803, resp) & 0x80) != 0;
+    if (ahora && !antes) return; // flanco de entrada
+  }
+}
+
+static bool solid_hit(const Video& v) {
+  bool resp = false;
+  return (const_cast<Video&>(v).read(0xD803, resp) & 0x20) != 0;
+}
+
+// SOLID_HIT ($D803 bit 5): colisión sprite <-> tile sólido.
+//
+// El hardware recorre los 32 sprites en el blanking y marca el bit si el
+// COLL_POINT de alguno cae sobre una celda con el bit 4 del atributo.
+static void test_solid_hit() {
+  Video v;
+  limpiar_oam(v);
+  entrar_en_blanking(v);
+  check(!solid_hit(v), "solid: sin sprites sobre sólidos, bit a 0");
+
+  // Sprite en (0,0) con COLL_POINT centro (4,4) -> celda (0,0).
+  poner_sprite(v, 0, 0, 0, 0, 0x00, 0x24);
+  entrar_en_blanking(v);
+  check(!solid_hit(v), "solid: celda no sólida -> 0");
+
+  poner_solido(v, 0, 0, true);
+  entrar_en_blanking(v);
+  check(solid_hit(v), "solid: celda sólida -> 1");
+
+  // El bit se recalcula entero cada frame, no es sticky.
+  poner_solido(v, 0, 0, false);
+  entrar_en_blanking(v);
+  check(!solid_hit(v), "solid: se limpia al dejar de tocar");
+
+  // Un sprite DESHABILITADO para el DIBUJADO (Y >= 248) SÍ participa en el
+  // barrido de colisión: el RTL recorre los 32 sin filtrar por Y. Con Y=248 y
+  // centro (4,4) el punto cae en (4,252) -> celda (0,31) = 1984.
+  limpiar_oam(v);
+  poner_solido(v, 0, 0, false);
+  poner_solido(v, 0, 31, true);
+  entrar_en_blanking(v);
+  check(solid_hit(v), "solid: Y>=248 no excluye del barrido");
+
+  // COLL_POINT sirve para elegir el punto: con el sprite en (0,0) y el punto
+  // en (7,7) cae en la celda (0,0) igual; desplazándolo a X=8 ya va a la 1.
+  solo_sprite_0(v);
+  poner_solido(v, 0, 0, false);
+  poner_solido(v, 1, 0, true);
+  poner_sprite(v, 0, 0, 0, 0, 0x00, 0x00); // punto en (0,0) -> celda 0
+  entrar_en_blanking(v);
+  check(!solid_hit(v), "solid: COLL_POINT (0,0) no llega a la celda 1");
+  poner_sprite(v, 0, 0, 0, 0, 0x00, 0x07); // punto en (7,0) -> sigue celda 0
+  entrar_en_blanking(v);
+  check(!solid_hit(v), "solid: COLL_POINT (7,0) tampoco");
+  poner_sprite(v, 0, 1, 0, 0, 0x00, 0x27); // dx=7,dy=4 -> x=8 -> celda 1
+  entrar_en_blanking(v);
+  check(solid_hit(v), "solid: desplazar el sprite cambia de celda");
+
+  // SCALE2X escala el punto de colisión: dx=4 pasa a 8.
+  solo_sprite_0(v);
+  limpiar_atributos(v);
+  poner_solido(v, 0, 0, true);
+  poner_sprite(v, 0, 0, 0, 0, 0x10, 0x24); // 2x, dx=4 -> 8 -> celda 1
+  entrar_en_blanking(v);
+  check(!solid_hit(v), "solid: SCALE2X duplica el COLL_POINT (celda 1)");
+  poner_sprite(v, 0, 0, 0, 0, 0x00, 0x24); // 1x, dx=4 -> celda 0
+  entrar_en_blanking(v);
+  check(solid_hit(v), "solid: sin 2x el mismo punto cae en la celda 0");
+}
+
 int main() {
   std::printf("test_video: Core de Video\n");
   test_paleta_satura();
   test_patrones_demo();
   test_arranque_muestra_cara();
+  test_solid_hit();
   test_barrido();
   if (fallos) {
     std::printf("test_video: %d FALLOS\n", fallos);

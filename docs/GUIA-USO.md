@@ -964,6 +964,38 @@ en la placa.
 > margen, y el emulador escribe en todas. No se modela porque no hay evidencia
 > de que un programa real escriba `$D815` en ciclos consecutivos.
 
+#### `SOLID_HIT`: colisión sprite ↔ tile sólido
+
+El bit 5 de `$D803` se activa si **algún sprite toca una celda marcada como
+sólida** (bit 4 del atributo). Permite que el juego detecte paredes sin
+duplicar el mapa en RAM.
+
+El core lo calcula **una vez por frame, al entrar en el blanking vertical**
+(`video_core.vhd`), recorriendo los 32 sprites:
+
+```
+punto = (X + dx, Y + dy)        dx/dy del COLL_POINT (byte +4 del OAM)
+celda = (punto_y/8) * 64 + (punto_x/8)
+hay colisión si (atributo[celda] & $10)
+```
+
+Detalles que conviene conocer porque no son evidentes:
+
+| Comportamiento | Explicación |
+|---|---|
+| **`COLL_POINT`** (byte +4) | Elige qué píxel del sprite se comprueba: `bits 2:0` = dx, `bits 5:3` = dy (0–7) |
+| **`SCALE2X` escala el punto** | Con el sprite a 2×, `dx`/`dy` se duplican (y `7` pasa a `15`, no a `14`) |
+| **`Y ≥ 248` no excluye** | Desactiva el **dibujado**, pero el barrido recorre los 32 sprites igual |
+| **Sin scroll** | Usa la celda directa de pantalla, no la del mapa desplazado |
+| **No es sticky** | Se recalcula entero cada frame; `clear_stats` existe en el RTL pero no se usa |
+
+> Ejemplo: `COLL_POINT = $24` es el centro (4,4); `$3C` el pie (4,7); `$27` el
+> borde derecho (7,4). Para que la colisión avise **antes** de incrustarse en
+> una pared, pon el punto en el borde que avanza.
+
+El emulador lo reproduce en `Video::barrido_colision()`, y `make test` cubre el
+punto de colisión, el escalado 2× y el caso de sprites deshabilitados.
+
 #### `SCALE2X` duplica, no compone cuadrantes
 
 El bit 4 de `FLAGS` dibuja el sprite a 16×16 **leyendo un único patrón**: cada
