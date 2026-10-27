@@ -1012,9 +1012,27 @@ Detalles que conviene conocer porque no son evidentes:
 > borde derecho (7,4). Para que la colisión avise **antes** de incrustarse en
 > una pared, pon el punto en el borde que avanza.
 
-El emulador lo reproduce en `Video::barrido_colision()`, y `make test` cubre el
-punto de colisión, el escalado 2×, el scroll, y el caso de sprites
-deshabilitados.
+> El emulador lo reproduce en `Video::barrido_colision()`, y `make test` cubre el
+> punto de colisión, el escalado 2×, el scroll, y el caso de sprites
+> deshabilitados.
+
+**Cómo inspeccionarlo sin cruzar capturas.** `/state.txt` expone el scroll y la
+celda que consulta cada sprite, así que no hace falta correlacionar `/screen.png`
+con el OAM (peticiones distintas, no atómicas):
+
+```
+VIDEO ($D800-$D817):
+  scroll: x=0 y=74
+  bandas: sin split
+  scroll de la colision: x=0 y=74  (ultima banda dibujada)
+  SOLID_HIT: 0
+  sprites con celda de colision (X,Y,tile -> celda, solida):
+    (el barrido recorre los 32, aunque Y>=248 no los dibuje)
+    sprite  0: X=148 Y=120 tile= 3 -> celda  530  SOLIDA
+```
+
+La vista de texto de `/vram.txt` también aplica el scroll, así que muestra lo
+que se ve en pantalla y no siempre la esquina (0,0).
 
 #### `SCALE2X` duplica, no compone cuadrantes
 

@@ -211,10 +211,19 @@ bool dump_vram_txt_mem(Video& video, std::string& out) {
   }
   appendf(out, "  (%d de 32 sprites activos)\n", activos);
 
-  out += "\n=== TILEMAP COMO TEXTO (40x30 visibles a scroll 0; tiles $20-$7F = ASCII) ===\n";
+  // Vista de texto de LO QUE SE VE, aplicando el scroll. Antes se leía siempre
+  // desde (0,0) y con scroll activo no coincidía con la pantalla.
+  const Video::Scroll sc = video.scroll();
+  appendf(out,
+          "\n=== TILEMAP COMO TEXTO (40x30 visibles, scroll x=%d y=%d; tiles $20-$7F = ASCII) ===\n",
+          sc.x, sc.y);
   for (int y = 0; y < 30; y++) {
     out += "  ";
-    for (int x = 0; x < 40; x++) out.push_back(printable(tm[y * Video::MAP_W + x]));
+    const int fila = (((y * Video::TILE_H) + sc.y) >> 3) & (Video::MAP_H - 1);
+    for (int x = 0; x < 40; x++) {
+      const int col = (((x * Video::TILE_W) + sc.x) >> 3) & (Video::MAP_W - 1);
+      out.push_back(printable(tm[fila * Video::MAP_W + col]));
+    }
     out.push_back('\n');
   }
   return true;
@@ -382,6 +391,59 @@ bool dump_state_txt_mem(Bus& bus, const Cpu6502* cpu, std::string& out) {
     out += "VIDEO ($D800-$D817):\n";
     appendf(out, "  tiles escritos: %d de %d celdas\n", tiles_no_vacios, Video::MAP_W * Video::MAP_H);
     appendf(out, "  sprites activos: %d de 32\n", sprites);
+
+    // Scroll: sin esto no se puede comprobar SOLID_HIT, porque la celda que
+    // revisa el barrido depende del scroll.
+    const Video::Scroll sc = v->scroll();
+    appendf(out, "  scroll: x=%d y=%d\n", sc.x, sc.y);
+    if (sc.raster0 == 0xFF && sc.raster1 == 0xFF) {
+      out += "  bandas: sin split\n";
+    } else {
+      if (sc.raster0 != 0xFF)
+        appendf(out, "  bandas: superior hasta linea %d, x=%d y=%d\n", sc.raster0, sc.band2_x, sc.band2_y);
+      else
+        out += "  bandas: sin banda superior\n";
+      if (sc.raster1 != 0xFF)
+        appendf(out, "          inferior desde linea %d, x=%d y=%d\n", sc.raster1, sc.band3_x, sc.band3_y);
+      else
+        out += "          sin banda inferior\n";
+    }
+    appendf(out, "  scroll de la colision: x=%d y=%d%s\n", sc.colision_x, sc.colision_y,
+            (sc.raster0 != 0xFF && sc.raster1 != 0xFF)
+                ? "  (ultima banda dibujada: la inferior)"
+                : "  (ultima banda dibujada)");
+
+    // SOLID_HIT y la celda que consulta cada sprite. Permite comprobar la
+    // colisión sin cruzar capturas con la OAM (que no son atómicas).
+    {
+      bool resp = false;
+      const uint8_t st = v->read(0xD803, resp);
+      appendf(out, "  SOLID_HIT: %d\n", (st & 0x20) ? 1 : 0);
+      out += "  sprites con celda de colision (X,Y,tile -> celda, solida):\n";
+      out += "    (el barrido recorre los 32, aunque Y>=248 no los dibuje)\n";
+      int mostrados = 0;
+      const auto& oam = v->oam();
+      for (int i = 0; i < 32; i++) {
+        const int celda = v->celda_colision(i);
+        if (celda < 0) continue;
+        const int x = oam[i * 5 + 0] | ((oam[i * 5 + 3] & 0x04) ? 0x100 : 0);
+        const int y = oam[i * 5 + 1];
+        const bool solida = (v->attrib()[celda] & 0x10) != 0;
+        // Se listan SIEMPRE los que caen sobre algo sólido (son los que
+        // explican SOLID_HIT) y, si no hay ninguno, los que SÍ se dibujan,
+        // para no llenar el volcado con los 32 sprites aparcados.
+        if (!solida) {
+          const bool dibuja = y < 248;
+          if (!dibuja) continue;
+          if (mostrados >= 6) continue;
+        }
+        appendf(out, "    sprite %2d: X=%3d Y=%3d tile=%2d -> celda %4d  %s\n", i, x, y,
+                oam[i * 5 + 2], celda, solida ? "SOLIDA" : "-");
+        mostrados++;
+      }
+      if (mostrados == 0) out += "    (ninguno visible ni sobre celda solida)\n";
+    }
+
     out += "  texto visible (24x40 desde fila 0):\n";
     for (int y = 0; y < 24; y++) {
       out += "    |";

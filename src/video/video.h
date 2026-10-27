@@ -73,6 +73,25 @@ public:
   const std::array<uint16_t, 32>&         palette()        const { return pal_; }
   uint8_t palette_ptr() const { return pal_ptr_; }
 
+  // Registros de scroll y bandas ($D804-$D812). Los necesita el depurador para
+  // averiguar qué celda calcula el barrido de colisión: sin ellos no se puede
+  // comprobar SOLID_HIT, porque la celda depende del scroll.
+  struct Scroll {
+    int x, y;           // scroll normal ($D804-$D807)
+    int band2_x, band2_y; // banda superior ($D80A-$D80D)
+    int band3_x, band3_y; // banda inferior ($D80F-$D812)
+    uint8_t raster0;    // $D809 ($FF = sin banda superior)
+    uint8_t raster1;    // $D80E ($FF = sin banda inferior)
+    // Scroll que ve el barrido de colisión: el de la última banda dibujada.
+    int colision_x, colision_y;
+  };
+  Scroll scroll() const;
+
+  // Celda (índice en el tilemap) que revisa el barrido de colisión para el
+  // sprite `n`. Devuelve -1 si el sprite no existe. Con SOLID_HIT y split de
+  // raster, esta celda es la que el hardware realmente consulta.
+  int celda_colision(int sprite) const;
+
 private:
   // Barrido: última línea simulada desde el arranque (para sync_scanlines).
   long long scanline_ = 0;

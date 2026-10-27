@@ -186,6 +186,57 @@ void Video::tick_frame() {
   }
 }
 
+// Scroll en vigor, tal como lo ve el barrido de colisión.
+//
+// El hardware tiene UNA señal scroll_x/scroll_y que se reescribe en cada
+// transición de banda; en el blanking vale lo que dejó la última banda dibujada
+// (la INFERIOR si hay split, el normal si no). Ver barrido_colision().
+Video::Scroll Video::scroll() const {
+  Scroll s{};
+  s.x = scroll_x_lo_ | ((scroll_x_hi_ & 0x07) << 8);
+  s.y = scroll_y_lo_ | ((scroll_y_hi_ & 0x07) << 8);
+  s.band2_x = band2_x_lo_ | ((band2_x_hi_ & 0x07) << 8);
+  s.band2_y = band2_y_lo_ | ((band2_y_hi_ & 0x07) << 8);
+  s.band3_x = band3_x_lo_ | ((band3_x_hi_ & 0x07) << 8);
+  s.band3_y = band3_y_lo_ | ((band3_y_hi_ & 0x07) << 8);
+  s.raster0 = raster0_;
+  s.raster1 = raster1_;
+  s.colision_x = s.x;
+  s.colision_y = s.y;
+  if (raster0_ != 0xFF && raster1_ != 0xFF) {
+    s.colision_x = s.band3_x;
+    s.colision_y = s.band3_y;
+  }
+  return s;
+}
+
+// Celda que consulta el barrido para un sprite. Mismo cálculo que
+// barrido_colision(), extraído para que no puedan divergir.
+int Video::celda_colision(int sprite) const {
+  if (sprite < 0 || sprite >= 32) return -1;
+  const Scroll s = scroll();
+
+  const int base = sprite * 5;
+  const uint8_t flags = oam_[base + 3];
+  const uint8_t control = oam_[base + 4];
+
+  const int ox = oam_[base + 0] | ((flags & 0x04) ? 0x100 : 0);
+  const int oy = oam_[base + 1];
+
+  int dx = control & 0x07;
+  int dy = (control >> 3) & 0x07;
+  if (flags & 0x10) { // SCALE2X
+    dx = (dx == 7) ? 15 : dx * 2;
+    dy = (dy == 7) ? 15 : dy * 2;
+  }
+
+  const int px = (ox + dx) & 0x1FF;
+  const int py = (oy + dy) & 0xFF;
+  const int wx = (px + s.colision_x) & 0x7FF;
+  const int wy = (py + s.colision_y) & 0x7FF;
+  return ((wy >> 3) & 0x1F) * MAP_W + ((wx >> 3) & 0x3F);
+}
+
 // Barrido de colisión sprite <-> tile sólido (video_core.vhd, fase de blanking).
 //
 // Para cada uno de los 32 sprites:
@@ -209,64 +260,13 @@ void Video::tick_frame() {
 //   - El bit se recalcula entero cada frame: no es sticky
 //     (clear_stats está declarado en el RTL pero sin usar).
 void Video::barrido_colision() {
-  // El RTL lee scroll_x/scroll_y, que NO son los registros del CPU sino el
-  // scroll de la banda ACTIVA, y son UNA SOLA señal que se reescribe en cada
-  // transición de banda.
-  //
-  // Orden de los hechos, del RTL:
-  //   - El barrido arranca en v_cnt = 480 (inicio del blanking).
-  //   - El scroll de banda se actualiza al cruzar raster0 (banda MEDIA) y
-  //     raster1 (banda INFERIOR), y vuelve a la SUPERIOR solo al final del
-  //     frame (v_cnt = 524).
-  // Así que en el blanking el valor es el de la ÚLTIMA banda DIBUJADA: la
-  // INFERIOR si hay split, o el NORMAL si no lo hay. NO es la superior.
-  //
-  // Consecuencia (la misma que sufre el hardware): con split de raster, solo
-  // colisionan bien los sprites de esa última banda. El motivo de fondo es que
-  // la señal de scroll es única: no hay un valor válido para los 32 sprites a
-  // la vez. Reproducirlo es lo correcto; arreglarlo de verdad requeriría
-  // guardar la banda por sprite en el line buffer (cambio de core).
-  int scx = scroll_x_lo_ | ((scroll_x_hi_ & 0x07) << 8);
-  int scy = scroll_y_lo_ | ((scroll_y_hi_ & 0x07) << 8);
-  if (raster0_ != 0xFF) {
-    // Con split, hay banda MEDIA (scroll normal) y puede haber INFERIOR.
-    // La última dibujada es la INFERIOR si raster1 está configurado; si no,
-    // la MEDIA, que es el scroll normal: ya está en scx/scy.
-    if (raster1_ != 0xFF) {
-      scx = band3_x_lo_ | ((band3_x_hi_ & 0x07) << 8);
-      scy = band3_y_lo_ | ((band3_y_hi_ & 0x07) << 8);
-    }
-  }
-
+  // El scroll que usa el barrido sale de scroll() (misma fuente que
+  // celda_colision(), para que el depurador vea exactamente lo mismo): es el
+  // de la ÚLTIMA banda dibujada, no el de la superior.
   bool hit = false;
   for (int i = 0; i < 32 && !hit; i++) {
-    const int base = i * 5;
-    const uint8_t flags = oam_[base + 3];
-    const uint8_t control = oam_[base + 4];
-
-    const int ox = oam_[base + 0] | ((flags & 0x04) ? 0x100 : 0); // X de 9 bits
-    const int oy = oam_[base + 1];
-    const bool scale2x = (flags & 0x10) != 0;
-
-    int dx = control & 0x07;        // COLL_POINT: bits 2:0
-    int dy = (control >> 3) & 0x07; //             bits 5:3
-    if (scale2x) {
-      // En 2x el punto se escala con el sprite: 0..6 -> x2, 7 -> 15.
-      dx = (dx == 7) ? 15 : dx * 2;
-      dy = (dy == 7) ? 15 : dy * 2;
-    }
-
-    // Sumas con el ancho del hardware: X 9 bits, Y 8 bits (desbordan y vuelven).
-    const int px = (ox + dx) & 0x1FF;
-    const int py = (oy + dy) & 0xFF;
-
-    // Paso a coordenadas de mundo (11 bits) y celda con módulo 64/32. El módulo
-    // absorbe el desbordamiento, así que ya no hace falta recortar antes.
-    const int wx = (px + scx) & 0x7FF;
-    const int wy = (py + scy) & 0x7FF;
-    const int celda = ((wy >> 3) & 0x1F) * MAP_W + ((wx >> 3) & 0x3F);
-
-    if (attrib_[celda] & 0x10) hit = true; // bit 4 = SOLIDO
+    const int celda = celda_colision(i);
+    if (celda >= 0 && (attrib_[celda] & 0x10)) hit = true; // bit 4 = SOLIDO
   }
   solid_hit_ = hit;
 }
