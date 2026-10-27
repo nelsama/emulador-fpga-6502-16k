@@ -87,6 +87,42 @@ Otros objetivos: `make run`, `make test`, `make clean`, `make rebuild`.
 `make test` compila y ejecuta las pruebas del intérprete de terminal (no
 necesitan SDL ni abrir la ventana, y tardan menos de un segundo).
 
+### Llevarlo a otra máquina: `make dist`
+
+Genera `dist/` con **todo lo necesario para ejecutar en otro Windows x64**, sin
+MSYS2 ni instalar nada:
+
+```bash
+make dist
+```
+
+```
+dist/
+├── emulador.exe
+├── SDL2.dll
+├── libgcc_s_seh-1.dll
+├── libstdc++-6.dll
+├── libwinpthread-1.dll
+├── tarjeta.img          (16 MB; si no existe, se avisa y se omite)
+├── run.bat
+├── run_debug.bat
+└── rom/
+    └── monitor.bin      (imprescindible)
+```
+
+Son unos 22 MB, casi todo la tarjeta. Copia la carpeta tal cual: los `.bat`
+usan rutas relativas y `cd /d "%~dp0"`, así que funcionan desde cualquier sitio.
+
+`make dist` termina comprobando con `objdump` que el `.exe` no depende de
+ninguna DLL que no esté en `dist/`. Si falta alguna, lo dice y falla.
+
+> Las cuatro DLLs son las únicas externas: el resto de dependencias
+> (`KERNEL32`, `USER32`, `WINMM`, `WS2_32`, `comdlg32`...) son de Windows. Si se
+> añade una biblioteca nueva al emulador, hay que ampliar `DIST_DLLS` en el
+> `Makefile`.
+
+`make dist-clean` borra `dist/` (también lo hace `make clean`).
+
 ---
 
 ## 3. Ejecutar

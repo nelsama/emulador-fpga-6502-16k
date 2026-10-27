@@ -7,6 +7,11 @@ build/
 *.cache/
 compile_commands.json
 
+# --- Distribución --------------------------------------------------------
+# La genera `make dist`: copia de binarios, DLLs y ROM lista para llevarse.
+# No se versiona (los binarios salen de compilar).
+dist/
+
 # --- Binarios y DLLs copiados por el Makefile ----------------------------
 # No se versionan: se obtienen compilando o copiando desde MSYS2.
 *.dll

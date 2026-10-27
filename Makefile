@@ -53,13 +53,55 @@ OBJS := $(patsubst %.cpp,%.o,$(patsubst %.cc,%.o,$(SRCS)))
 DEPS := $(OBJS:.o=.d)
 BIN  := emulador.exe
 
-.PHONY: all run test clean rebuild info
+.PHONY: all run test clean rebuild info dist
 
 all: $(BIN)
 
 $(BIN): $(OBJS)
 	$(CXX) $(CXXFLAGS) -o $@ $(OBJS) $(LDFLAGS)
 	@if [ "$(SDL2_FOUND)" = "1" ]; then cp -f $(SDL2_PREFIX)/bin/SDL2.dll . 2>/dev/null && echo "Copia: SDL2.dll"; fi
+
+# --- Distribucion --------------------------------------------------------
+#
+# deja en dist/ TODO lo necesario para llevarse el emulador a otra maquina
+# Windows x64: el .exe, sus DLLs, la ROM, la tarjeta y los lanzadores.
+# No incluye fuentes ni herramientas: solo lo que se ejecuta.
+#
+#   make dist          -> regenera dist/ (compila si hace falta)
+#   make dist-clean    -> borra dist/
+#
+# Para comprobar que no falta ninguna DLL, arranca en un equipo sin MSYS2.
+DIST := dist
+DIST_DLLS := SDL2.dll libgcc_s_seh-1.dll libstdc++-6.dll libwinpthread-1.dll
+
+dist: $(BIN)
+	@rm -rf $(DIST)
+	@mkdir -p $(DIST)/rom
+	@cp -f $(BIN) $(DIST)/
+	@for d in $(DIST_DLLS); do \
+	  if [ -f "$$d" ]; then cp -f "$$d" $(DIST)/; \
+	  else echo "[!] falta $$d: el emulador no arrancara fuera de MSYS2"; fi; \
+	done
+	@cp -f rom/monitor.bin $(DIST)/rom/
+	@if [ -f tarjeta.img ]; then cp -f tarjeta.img $(DIST)/; \
+	else echo "[!] sin tarjeta.img: el monitor arrancara sin SD"; fi
+	@cp -f run.bat run_debug.bat $(DIST)/ 2>/dev/null || true
+	@# Sexta comprobacion: el .exe debe cargar sin MSYS2 en el PATH.
+	@$(MAKE) --no-print-directory dist-verificar
+
+# Comprueba que el ejecutable de dist/ solo depende de DLLs del sistema o de
+# las que se han copiado. Requiere objdump (MSYS2).
+dist-verificar:
+	@if command -v objdump >/dev/null 2>&1; then \
+	  faltan=$$(objdump -p $(DIST)/$(BIN) | sed -n 's/.*DLL Name: //p' | \
+	    grep -Ei '^(lib|SDL)' | grep -vE '^(KERNEL32|USER32|GDI32|WINMM|WS2_32|comdlg32|SHELL32|ADVAPI32|OLE32|OLEAUT32|SETUPAPI|IMM32|VERSION)\.dll$$' | \
+	    while read n; do [ -f "$(DIST)/$$n" ] || echo "$$n"; done); \
+	  if [ -n "$$faltan" ]; then echo "[!] DLLs sin copiar: $$faltan"; exit 1; \
+	  else echo "dist: OK ($(DIST)/ listo para copiar)"; fi; \
+	else echo "dist: generado (sin objdump, no se pudo verificar)"; fi
+
+dist-clean:
+	@rm -rf $(DIST)
 
 %.o: %.cpp
 	$(CXX) $(CXXFLAGS) -c -o $@ $<
@@ -91,6 +133,7 @@ info:
 
 clean:
 	rm -f $(OBJS) $(DEPS) $(BIN) test_terminal.exe test_gpio_flag.exe test_video.exe
+	rm -rf $(DIST)
 
 rebuild: clean all
 
