@@ -23,48 +23,82 @@ except ImportError:
     sys.exit("md2html.py: falta el paquete 'markdown' (pip install markdown)")
 
 CSS = """
-:root { color-scheme: light dark; }
+:root {
+  color-scheme: light dark;
+  --fg: #1f2328;
+  --bg: #ffffff;
+  --fg-tenue: #57606a;
+  --link: #0969da;
+  --linea: #d8dee4;
+  --linea-suave: #8884;
+  --celda: #ffffff;
+  --celda-alt: #f6f8fa;
+  --cabecera: #f0f2f4;
+  --codigo: #eff1f3;
+  --bloque: #f6f8fa;
+  --bloque-borde: #d8dee4;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --fg: #d6d9dd;
+    --bg: #17191c;
+    --fg-tenue: #a9b0b8;
+    --link: #6cb6ff;
+    --linea: #2a2e34;
+    --linea-suave: #4a5058;
+    --celda: #17191c;
+    --celda-alt: #1e2126;
+    --cabecera: #262a30;
+    --codigo: #262a30;
+    --bloque: #101215;
+    --bloque-borde: #2a2e34;
+  }
+}
 body {
   font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   line-height: 1.6; max-width: 60rem; margin: 0 auto; padding: 2rem 1.5rem 5rem;
-  color: #1f2328; background: #fff;
+  color: var(--fg); background: var(--bg);
 }
-@media (prefers-color-scheme: dark) {
-  body { color: #d6d9dd; background: #17191c; }
-  a { color: #6cb6ff; }
-  th { background: #22252a; }
-  tr:nth-child(even) td { background: #1d2024; }
-  code { background: #22252a; }
-  pre { background: #101215; border-color: #2a2e34; }
-  blockquote { border-color: #3a3f46; color: #a9b0b8; }
-  hr { border-color: #2a2e34; }
-}
-h1, h2, h3, h4 { line-height: 1.25; margin-top: 2.2rem; }
-h1 { font-size: 1.9rem; border-bottom: 2px solid currentColor; padding-bottom: .4rem; }
-h2 { font-size: 1.45rem; border-bottom: 1px solid #8884; padding-bottom: .3rem; }
+h1, h2, h3, h4 { line-height: 1.25; margin-top: 2.2rem; color: var(--fg); }
+h1 { font-size: 1.9rem; border-bottom: 2px solid var(--linea); padding-bottom: .4rem; }
+h2 { font-size: 1.45rem; border-bottom: 1px solid var(--linea); padding-bottom: .3rem; }
 h3 { font-size: 1.15rem; }
-a { color: #0969da; text-decoration: none; }
+a { color: var(--link); text-decoration: none; }
 a:hover { text-decoration: underline; }
 code {
   font-family: "Cascadia Mono", Consolas, "Courier New", monospace;
-  font-size: .88em; background: #eff1f3; padding: .15em .35em; border-radius: 4px;
+  font-size: .88em; background: var(--codigo); color: var(--fg);
+  padding: .15em .35em; border-radius: 4px;
 }
 pre {
-  background: #f6f8fa; border: 1px solid #d8dee4; border-radius: 6px;
-  padding: .9rem 1rem; overflow-x: auto;
+  background: var(--bloque); border: 1px solid var(--bloque-borde);
+  border-radius: 6px; padding: .9rem 1rem; overflow-x: auto;
 }
-pre code { background: none; padding: 0; font-size: .85em; }
-table { border-collapse: collapse; width: 100%; margin: 1.1rem 0; font-size: .94em; }
-th, td { border: 1px solid #8884; padding: .45rem .7rem; text-align: left; vertical-align: top; }
-th { background: #f0f2f4; font-weight: 600; }
-tr:nth-child(even) td { background: #fafbfc; }
+pre code { background: none; padding: 0; font-size: .85em; color: var(--fg); }
+
+/* Tabla: fondo y color SIEMPRE de la misma variable, para que el tema oscuro
+   no deje una fila con fondo claro y texto claro (contraste nulo). */
+table {
+  border-collapse: collapse; width: 100%; margin: 1.1rem 0; font-size: .94em;
+  color: var(--fg);
+}
+th, td {
+  border: 1px solid var(--linea-suave); padding: .45rem .7rem;
+  text-align: left; vertical-align: top;
+  background: var(--celda); color: var(--fg);
+}
+th { background: var(--cabecera); font-weight: 600; color: var(--fg); }
+tbody tr:nth-child(even) td { background: var(--celda-alt); }
+
 blockquote {
-  margin: 1.1rem 0; padding: .3rem 1rem; border-left: 4px solid #d0d7de; color: #57606a;
+  margin: 1.1rem 0; padding: .3rem 1rem;
+  border-left: 4px solid var(--linea-suave); color: var(--fg-tenue);
 }
 blockquote > :first-child { margin-top: 0; }
 blockquote > :last-child { margin-bottom: 0; }
-hr { border: 0; border-top: 1px solid #d0d7de; margin: 2.5rem 0; }
+hr { border: 0; border-top: 1px solid var(--linea); margin: 2.5rem 0; }
 img { max-width: 100%; height: auto; }
+strong { color: var(--fg); }
 """
 
 
