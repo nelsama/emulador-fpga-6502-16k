@@ -991,8 +991,19 @@ Detalles que conviene conocer porque no son evidentes:
 
 > **Con scroll**, la celda que se lee es la misma que se ve bajo el sprite:
 > `celda = ((punto_x + scroll_x)/8 mod 64) + ((punto_y + scroll_y)/8 mod 32)*64`.
-> El scroll usado es el de la banda activa; en el blanking es el de la banda
-> **superior** si hay split, o el normal si no lo hay.
+>
+> ⚠️ **Con split de raster hay una limitación del propio core.** El barrido usa
+> **una única** señal de scroll, que se reescribe al cruzar cada banda. Como el
+> barrido ocurre en el blanking (`v_cnt = 480`), y la banda superior no se
+> restablece hasta `v_cnt = 524`, el valor que ve es el de la **última banda
+> dibujada**: la **inferior** si está configurada, o el scroll normal si no hay
+> split.
+>
+> Consecuencia: **con split activo, solo colisionan bien los sprites de esa
+> última banda**. Los de las bandas superiores se comprueban contra la celda que
+> corresponde a otro scroll. El emulador reproduce ese comportamiento; no lo
+> corrige, porque hacerlo de verdad exige guardar la banda de cada sprite en el
+> line buffer (un cambio de core, no del emulador).
 
 > Ejemplo: `COLL_POINT = $24` es el centro (4,4); `$3C` el pie (4,7); `$27` el
 > borde derecho (7,4). Para que la colisión avise **antes** de incrustarse en

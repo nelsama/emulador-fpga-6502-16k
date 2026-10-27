@@ -305,6 +305,48 @@ static void test_solid_hit_scroll() {
   check(solid_hit(v), "scroll: scroll_y=8 mira la fila 1");
 }
 
+// Con split de raster, el barrido usa el scroll de la ÚLTIMA banda DIBUJADA,
+// no el de la superior. Es una limitación del propio core (la señal scroll_x
+// es única y se reescribe al cruzar cada banda), y el emulador la reproduce.
+static void test_solid_hit_banda() {
+  Video v;
+  bool resp = false;
+
+  // Prep: sprite 0 en (0,0) con COLL_POINT (0,0) -> punto (0,0).
+  solo_sprite_0(v);
+  limpiar_atributos(v);
+  poner_sprite(v, 0, 0, 0, 0, 0x00, 0x00);
+
+  // Split SIN banda inferior: superior (band2) a 8, normal a 0.
+  v.write(0xD809, 100, resp); // raster0: fin de la banda superior
+  v.write(0xD80A, 8, resp);   // band2_x = 8
+  v.write(0xD80B, 0, resp);
+  v.write(0xD80E, 0xFF, resp); // raster1 = $FF: sin banda inferior
+  // La última banda dibujada es la MEDIA, que usa el scroll NORMAL (0).
+  poner_solido(v, 0, 0, true);
+  poner_solido(v, 1, 0, true);
+  entrar_en_blanking(v);
+  check(solid_hit(v), "banda: sin banda inferior usa el scroll normal");
+
+  // Ahora con banda inferior a 16: la última dibujada es la INFERIOR.
+  v.write(0xD80E, 200, resp);  // raster1
+  v.write(0xD80F, 16, resp);   // band3_x = 16 -> celda 2
+  v.write(0xD810, 0, resp);
+  limpiar_atributos(v);
+  poner_solido(v, 0, 0, true); // scroll normal
+  poner_solido(v, 1, 0, true); // scroll band2
+  poner_solido(v, 2, 0, true); // scroll band3
+  entrar_en_blanking(v);
+  check(solid_hit(v), "banda: con banda inferior, sprite 0 mira la celda 2");
+
+  // Si solo la celda de la banda SUPERIOR es sólida, NO debe detectar:
+  // el hardware está mirando el scroll de la INFERIOR.
+  limpiar_atributos(v);
+  poner_solido(v, 1, 0, true);
+  entrar_en_blanking(v);
+  check(!solid_hit(v), "banda: la superior no se usa en el barrido");
+}
+
 int main() {
   std::printf("test_video: Core de Video\n");
   test_paleta_satura();
@@ -312,6 +354,7 @@ int main() {
   test_arranque_muestra_cara();
   test_solid_hit();
   test_solid_hit_scroll();
+  test_solid_hit_banda();
   test_barrido();
   if (fallos) {
     std::printf("test_video: %d FALLOS\n", fallos);

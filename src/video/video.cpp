@@ -210,16 +210,31 @@ void Video::tick_frame() {
 //     (clear_stats está declarado en el RTL pero sin usar).
 void Video::barrido_colision() {
   // El RTL lee scroll_x/scroll_y, que NO son los registros del CPU sino el
-  // scroll de la banda ACTIVA. Al final de cada frame (h_cnt = H_TOTAL-1 y
-  // v_cnt = V_TOTAL-1) se reasignan: si no hay split (rl0 = $FF) toman el
-  // scroll NORMAL; si hay split, el de la banda SUPERIOR (band2). El barrido
-  // ocurre en el blanking, justo despues de esa transicion, asi que ese es el
-  // valor que ve.
+  // scroll de la banda ACTIVA, y son UNA SOLA señal que se reescribe en cada
+  // transición de banda.
+  //
+  // Orden de los hechos, del RTL:
+  //   - El barrido arranca en v_cnt = 480 (inicio del blanking).
+  //   - El scroll de banda se actualiza al cruzar raster0 (banda MEDIA) y
+  //     raster1 (banda INFERIOR), y vuelve a la SUPERIOR solo al final del
+  //     frame (v_cnt = 524).
+  // Así que en el blanking el valor es el de la ÚLTIMA banda DIBUJADA: la
+  // INFERIOR si hay split, o el NORMAL si no lo hay. NO es la superior.
+  //
+  // Consecuencia (la misma que sufre el hardware): con split de raster, solo
+  // colisionan bien los sprites de esa última banda. Reproducirlo es lo
+  // correcto; arreglarlo de verdad requería guardar la banda por sprite en el
+  // line buffer, y eso es un cambio de core, no del emulador.
   int scx = scroll_x_lo_ | ((scroll_x_hi_ & 0x07) << 8);
   int scy = scroll_y_lo_ | ((scroll_y_hi_ & 0x07) << 8);
   if (raster0_ != 0xFF) {
-    scx = band2_x_lo_ | ((band2_x_hi_ & 0x07) << 8);
-    scy = band2_y_lo_ | ((band2_y_hi_ & 0x07) << 8);
+    // Con split, hay banda MEDIA (scroll normal) y puede haber INFERIOR.
+    // La última dibujada es la INFERIOR si raster1 está configurado; si no,
+    // la MEDIA, que es el scroll normal: ya está en scx/scy.
+    if (raster1_ != 0xFF) {
+      scx = band3_x_lo_ | ((band3_x_hi_ & 0x07) << 8);
+      scy = band3_y_lo_ | ((band3_y_hi_ & 0x07) << 8);
+    }
   }
 
   bool hit = false;
