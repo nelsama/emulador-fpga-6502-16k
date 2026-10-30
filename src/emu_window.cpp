@@ -295,6 +295,9 @@ bool EmuWindow::start(int video_w, int video_h, int scale, bool terminal) {
   texture_ = tex;
   active_ = true;
   joy_ = Gpio::JOY_IDLE;
+  // Necesario para recibir SDL_TEXTINPUT (caracteres ya resueltos por SDL).
+  // Se activa siempre: en modo joystick los eventos se ignoran.
+  SDL_StartTextInput();
   // Arranque directo en pantalla completa (útil para lanzadores y pruebas:
   // EMU_FULLSCREEN=1). F11/Alt+Intro lo alternan en marcha.
   if (std::getenv("EMU_FULLSCREEN")) set_vista(Vista::PantallaCompleta);
@@ -468,6 +471,17 @@ void EmuWindow::clic_en(int x, int y) {
       } else if (z.accion == "borrar_confirmar") {
         fila_borrar_ = -1;
         if (on_sd_accion) on_sd_accion("delete", z.arg);
+      } else if (z.accion == "teclado_destino") {
+        // Alterna UART <-> joystick. En modo UART las teclas de juego dejan de
+        // mover (cursores/WASD/Espacio/Z/Ctrl/Intro) y pasan a enviarse al
+        // UART: es lo que permite escribir comandos sin PuTTY.
+        teclado_uart_ = !teclado_uart_;
+        // El estado anterior del joystick se descarta: si se cambio el modo con
+        // una tecla pulsada, no debe quedarse "enganchada".
+        joy_teclado_ = Gpio::JOY_IDLE;
+        if (on_teclado_destino) on_teclado_destino(teclado_uart_);
+        std::printf("Teclado: %s\n", teclado_uart_ ? "UART" : "joystick");
+        std::fflush(stdout);
       } else if (z.accion == "codificacion") {
         // Conmuta CP437 <-> UTF-8 en caliente. El panel NO decodifica: solo
         // avisa, porque quien interpreta los bytes del cable es el terminal
@@ -577,10 +591,34 @@ void EmuWindow::dibujar_terminal(void* renderer, const void* caja) {
   SDL_RenderCopy(ren, static_cast<SDL_Texture*>(term_tex_), nullptr, term);
 
   // Cursor: bloque hueco (marco de 1 px) en la posición actual, si está visible.
+  //
+  // El marco NO ocupa la celda entera (8x16). La fuente CP437 de este core
+  // tiene la tinta entre las filas 3 y 10 de la celda (baseline en la 10) y
+  // deja vacías la 0-2 y la 11-15. Un marco de celda completa parecia "mas
+  // alto" que las letras porque cubria 5 filas de vacio por debajo.
+  //
+  // Se calibra con la caja de tinta real de los glifos:
+  //   - ascendentes (`b`, `d`, `k`, mayusculas): fila 3..10
+  //   - x-height (`a`, `o`, `>`) y descendentes (`g`, `p`): 6..10
+  // Por eso se usa 3..10: es el alto de una letra alta, y el cursor queda
+  // pegado a la linea base igual que ellas.
+  //
+  // Ademas, `SDL_RenderDrawRect` pinta los bordes derecho e inferior FUERA del
+  // rectangulo (ocupa w+1 x h+1), asi que se le pasa un pixel menos.
+  //
+  // El origen es el MISMO que el del texto (`TERM_PAD`, no `TERM_PAD / 2`): el
+  // terminal se recorta por ese margen antes de escalarlo y la rejilla empieza
+  // ahi.
   if (term_.cursor_visible()) {
-    const int x0 = term->x + TERM_PAD / 2;
-    const int y0 = term->y + TERM_PAD / 2;
-    SDL_Rect c{x0 + term_.cursor_col() * 8, y0 + term_.cursor_fila() * 16, 8, 16};
+    // Caja de tinta de la fuente 8x16: de la fila 3 a la 10 (ambas incluidas).
+    constexpr int kTintaArriba = 3;
+    constexpr int kTintaAbajo = 10;
+    constexpr int kTintaAlto = kTintaAbajo - kTintaArriba + 1;  // 8 px
+    const int x0 = term->x + TERM_PAD;
+    const int y0 = term->y + TERM_PAD;
+    SDL_Rect c{x0 + term_.cursor_col() * TERM_CW,
+               y0 + term_.cursor_fila() * TERM_CH + kTintaArriba * TERM_SCALE,
+               TERM_CW - 1, kTintaAlto * TERM_SCALE - 1};
     SDL_SetRenderDrawColor(ren, 220, 235, 220, 255);
     SDL_RenderDrawRect(ren, &c);
   }
@@ -1116,6 +1154,25 @@ void EmuWindow::present(const uint32_t* rgb, uint8_t leds) {
           draw_glyph(ren, b.x + 5 + i * TERM_CW, b.y + 2, etiqueta[i], TERM_SCALE);
         }
         zonas_.push_back(Zona{b.x, b.y, b.w, b.h, "codificacion", ""});
+
+        // Selector del destino del teclado, a la izquierda del de codificacion.
+        // UART: se escribe en el monitor sin PuTTY y los programas que lean del
+        // UART reciben las teclas. Joystick: cursores/WASD mueven, como antes.
+        const char* etq_tec = teclado_uart_ ? "UART" : "JOY";
+        const int ancho_tec = 4 * TERM_CW + 10;
+        SDL_Rect tk{b.x - ancho_tec - 4, term.y + 1, ancho_tec, 13};
+        SDL_SetRenderDrawColor(ren, 30, 34, 44, 255);
+        SDL_RenderFillRect(ren, &tk);
+        if (teclado_uart_)
+          SDL_SetRenderDrawColor(ren, 90, 160, 120, 255);
+        else
+          SDL_SetRenderDrawColor(ren, 70, 90, 110, 255);
+        SDL_RenderDrawRect(ren, &tk);
+        SDL_SetRenderDrawColor(ren, 150, teclado_uart_ ? 220 : 170, teclado_uart_ ? 170 : 200, 255);
+        for (int i = 0; i < 4; i++) {
+          draw_glyph(ren, tk.x + 5 + i * TERM_CW, tk.y + 2, etq_tec[i], TERM_SCALE);
+        }
+        zonas_.push_back(Zona{tk.x, tk.y, tk.w, tk.h, "teclado_destino", ""});
       }
     }
   }
@@ -1163,6 +1220,16 @@ bool EmuWindow::poll() {
       }
 
       // --- Teclado ---
+      // Con el teclado en modo UART, los caracteres llegan con este evento
+      // (ya con mayusculas, acentos y teclas de otro idioma resueltos por SDL)
+      // y se envian al UART como si se escribieran por el cable.
+      case SDL_TEXTINPUT: {
+        if (teclado_uart_ && !dialogo_.activo && on_tecla_uart) {
+          for (const char* p = ev.text.text; *p; p++) on_tecla_uart(*p);
+        }
+        break;
+      }
+
       case SDL_KEYDOWN:
       case SDL_KEYUP: {
         const bool down = (ev.type == SDL_KEYDOWN);
@@ -1205,14 +1272,40 @@ bool EmuWindow::poll() {
           break;
         }
         switch (ev.key.keysym.sym) {
-          // Cruceta: cursores y WASD.
-          case SDLK_UP:    case SDLK_w: in.set(t, Gpio::JOY_UP, down);    break;
-          case SDLK_DOWN:  case SDLK_s: in.set(t, Gpio::JOY_DOWN, down);  break;
-          case SDLK_LEFT:  case SDLK_a: in.set(t, Gpio::JOY_LEFT, down);  break;
-          case SDLK_RIGHT: case SDLK_d: in.set(t, Gpio::JOY_RIGHT, down); break;
+          // Cruceta: cursores y WASD. Solo cuando el teclado va al joystick.
+          // Con teclado_uart estos llegan como SDL_TEXTINPUT al UART.
+          case SDLK_UP:    if (!teclado_uart_) in.set(t, Gpio::JOY_UP, down);    break;
+          case SDLK_DOWN:  if (!teclado_uart_) in.set(t, Gpio::JOY_DOWN, down);  break;
+          case SDLK_LEFT:  if (!teclado_uart_) in.set(t, Gpio::JOY_LEFT, down);  break;
+          case SDLK_RIGHT: if (!teclado_uart_) in.set(t, Gpio::JOY_RIGHT, down); break;
+          case SDLK_w:     if (!teclado_uart_) in.set(t, Gpio::JOY_UP, down);    break;
+          case SDLK_s:     if (!teclado_uart_) in.set(t, Gpio::JOY_DOWN, down);  break;
+          case SDLK_a:     if (!teclado_uart_) in.set(t, Gpio::JOY_LEFT, down);  break;
+          case SDLK_d:     if (!teclado_uart_) in.set(t, Gpio::JOY_RIGHT, down); break;
           // Fuego: Espacio, Z, Ctrl izquierdo o Intro.
-          case SDLK_SPACE: case SDLK_z: in.set(t, Gpio::JOY_FIRE, down);     break;
-          case SDLK_LCTRL: case SDLK_RETURN: in.set(t, Gpio::JOY_FIRE, down); break;
+          case SDLK_SPACE: case SDLK_z:
+            if (!teclado_uart_) in.set(t, Gpio::JOY_FIRE, down);
+            break;
+          case SDLK_LCTRL:
+            if (!teclado_uart_) in.set(t, Gpio::JOY_FIRE, down);
+            break;
+          // Intro: fuego en modo joystick; Enter del terminal en modo UART
+          // (este evento no genera SDL_TEXTINPUT, hay que traducirlo a mano).
+          case SDLK_RETURN: case SDLK_KP_ENTER:
+            if (teclado_uart_) {
+              if (down && !dialogo_.activo && on_tecla_uart) on_tecla_uart('\r');
+            } else {
+              in.set(t, Gpio::JOY_FIRE, down);
+            }
+            break;
+          case SDLK_BACKSPACE:
+            if (teclado_uart_ && down && !dialogo_.activo && on_tecla_uart)
+              on_tecla_uart(0x08);
+            break;
+          case SDLK_TAB:
+            if (teclado_uart_ && down && !dialogo_.activo && on_tecla_uart)
+              on_tecla_uart('\t');
+            break;
           // Pantalla completa. Solo afecta a la ventana: el panel lateral
           // conserva su tamaño y es el vídeo el que se amplía.
           case SDLK_F11:

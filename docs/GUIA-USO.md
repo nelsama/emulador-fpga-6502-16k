@@ -1090,19 +1090,49 @@ los bits 0-2 al escribir `$C002`.
 
 #### Controles de la ventana
 
-| Acción | Teclado | Mando conectado al PC |
-|---|---|---|
-| Mover | Cursores o **WASD** | Stick izquierdo o cruceta |
-| Fuego | **Espacio**, Z, Ctrl izq. o Intro | A, B, X, Y, hombros o gatillos |
-| Cambiar de vista (normal / solo vídeo / completa) | **F11** o Alt+Intro | Clic en la pestaña del margen |
-| Volver a la vista normal | **Esc** o clic derecho | — |
+El teclado del PC tiene **dos destinos**, y los elige un selector en el panel
+(`UART` / `JOY`, junto al de codificación). Por defecto va a `UART`.
+
+| Acción | Teclado en modo `UART` | Teclado en modo `JOY` | Mando conectado al PC |
+|---|---|---|---|
+| Escribir en el monitor | Sí (ver abajo) | — | — |
+| Mover | — | Cursores o **WASD** | Stick izquierdo o cruceta |
+| Fuego | — | **Espacio**, Z, Ctrl izq. o Intro | A, B, X, Y, hombros o gatillos |
+| Cambiar de vista (normal / solo vídeo / completa) | **F11** o Alt+Intro | **F11** o Alt+Intro | Clic en la pestaña del margen |
+| Volver a la vista normal | **Esc** o clic derecho | **Esc** o clic derecho | — |
+
+`F11`, `Alt+Intro` y `Esc` funcionan en los dos modos: nunca te quedas sin salir.
+
+#### Escribir comandos sin PuTTY
+
+Con el selector en `UART`, el teclado de la ventana se comporta **como el cable**
+RS-232: cada tecla entra por el mismo camino que PuTTY o `/uart?cmd=`. Sirve para
+llevar el monitor sin abrir PuTTY y también para los programas que leen del UART
+(por ejemplo, los menús de una demo).
+
+```bash
+./emulador.exe rom/monitor.bin 4000 tarjeta.img --debug
+# con la ventana delante, en modo UART:
+>ls               ← escrito con el teclado del PC
+Archivos: ...
+```
+
+- Intro manda `\r` (lo que espera el monitor), Retroceso `0x08` y Tab `\t`. Los
+  acentos y los símbolos los resuelve SDL, así que llegan bien.
+- Pulsa el selector y quedará en `JOY`: entonces el teclado mueve el joystick y
+  **no** manda nada al UART. Es lo que se usa para jugar sin mando.
+- El **mando físico sigue funcionando siempre**, en los dos modos.
+- Si un programa lee WASD por el UART, pon `UART` y funcionará: por eso el
+  destino es un selector y no una lista de teclas fija (WASD al joystick sería
+  ambiguo).
 
 Redimensionar y maximizar: ver "Agrandar la ventana / pantalla completa" más
 abajo; en ambos casos solo crece el vídeo.
 
-Las dos fuentes **conviven**: si mantienes una dirección con el mando y pulsas
-otra tecla, ambas cuentan; soltar una no anula la otra. Cualquier mando que
-reconozca SDL sirve (Xbox, DualShock, genéricos), y se puede enchufar con el
+Las dos fuentes **conviven en el joystick**: con el selector en `JOY`, un mando
+físico y el teclado cuentan a la vez; si mantienes una dirección con el mando y
+pulsas otra tecla, ambas cuentan, y soltar una no anula la otra. Cualquier mando
+que reconozca SDL sirve (Xbox, DualShock, genéricos), y se puede enchufar con el
 emulador en marcha.
 
 #### Comprobar que las pulsaciones llegan
@@ -1137,8 +1167,10 @@ La ventana tiene dos zonas:
   del UART. Los módulos se apilan, así que añadir otro es dibujarlo debajo.
 - **Derecha:** el framebuffer del Core de Vídeo, escalado ×N y alineado arriba.
 
-Todo el panel es de **solo lectura**: refleja el estado de la máquina, nunca
-manda nada hacia la emulación.
+Todo lo que muestra el panel es de **solo lectura**: refleja el estado de la
+máquina, nunca manda nada hacia la emulación. La única excepción es el teclado,
+y solo en modo `UART`: entonces sus teclas van al UART, igual que el cable (ver
+«Escribir comandos sin PuTTY»).
 
 Si la ventana no cabe en la pantalla (1366×768, portátiles con DPI alto), se
 reduce la escala del vídeo a ×2 automáticamente; el panel lateral nunca baja.
@@ -1315,14 +1347,19 @@ decodificación es solo para el panel de la ventana y `/console.png`.
   hasta 1000 líneas. La ventana muestra el número de líneas guardadas.
 - La ventana crece en alto lo necesario para que quepan las 24 filas.
 
-##### Solo lectura
+##### Entrada de teclado
 
-La consola **nunca escribe hacia la emulación**:
+La consola **nunca escribe hacia la emulación por su cuenta**: solo refleja lo
+que la CPU ya transmitió, y observa los bytes **sin consumir** la FIFO, así que
+PuTTY sigue recibiendo lo mismo si está conectado.
 
-- Observa los bytes que la CPU ya transmitió, **sin consumir** la FIFO. PuTTY
-  sigue recibiendo lo mismo si está conectado.
-- No hay teclado hacia la consola: las teclas son del joystick y de F11.
-- No hay `enqueue_rx` desde la ventana.
+Lo que llega al UART es el **teclado del PC**, y solo si el selector del panel
+está en `UART` (ver «Escribir comandos sin PuTTY»):
+
+- En `UART`, cada carácter tecleado entra por `enqueue_rx`, el mismo camino que
+  PuTTY o `/uart?cmd=`. Intro manda `\r`, Retroceso `0x08` y Tab `\t`.
+- En `JOY`, el teclado es del joystick y no manda nada al UART.
+- `F11` / `Alt+Intro` / `Esc` funcionan siempre (nunca te quedas sin salir).
 
 ##### Capturarla
 

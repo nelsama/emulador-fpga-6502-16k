@@ -332,8 +332,11 @@ la tarjeta o el nombre del fichero: **no es el código**.
 - **No** valida la codificación: el UART mueve bytes sueltos, como el hardware.
   El panel **entiende** UTF-8 para poder dibujar símbolos modernos (fichas de
   ajedrez, flechas) en **una sola celda**, pero eso es solo de presentación.
-- La consola es de **solo lectura**: no manda nada al programa ni acepta teclado.
-  Para escribir en el programa usa el UART (socket 4000) o el joystick.
+- La consola es de **solo lectura hacia la emulación**: solo refleja lo que la
+  CPU transmitió. El teclado del PC sí puede escribir en el programa, pero solo
+  si el selector del panel está en `UART` (por defecto); en `JOY` mueve el
+  joystick. Lo que entra va por `Uart::enqueue_rx`, el mismo camino que el socket
+  4000 o `/uart?cmd=`.
 - El ANSI cubierto es el habitual de consola: no hay regiones de scroll,
   ratón ni consultas de estado del cursor.
 - La consola es **80×24 fija** (con scrollback interno), no redimensionable por

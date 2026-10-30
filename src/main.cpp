@@ -235,6 +235,15 @@ int main(int argc, char** argv) {
   // interpreta los bytes es el terminal del UART, asi que hay que avisarle a
   // el; el panel solo dibuja lo que ya decodifico.
   window.on_codificacion = [&](bool utf8) { uart.set_utf8(utf8); };
+  // Teclado del PC -> UART. Es el mismo camino que usa PuTTY y el endpoint
+  // /uart: el monitor (o el programa que lea del UART) recibe las teclas como
+  // si llegaran por el cable. Con esto se puede cargar un programa sin PuTTY.
+  window.on_tecla_uart = [&](char c) { uart.enqueue_rx((uint8_t)(unsigned char)c); };
+  window.on_teclado_destino = [](bool uart) {
+    // Por si en el futuro hay que reaccionar (p. ej. mostrar el cursor del
+    // terminal solo en modo UART). De momento basta con el aviso por consola.
+    std::printf("Teclado -> %s\n", uart ? "UART" : "joystick");
+  };
   // Menú SD de la ventana: las acciones llegan aquí, que es donde están la
   // tarjeta y la emulación.
   window.on_sd_accion = [&](const std::string& accion, const std::string& arg) {

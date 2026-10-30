@@ -117,6 +117,19 @@ public:
   // es quien interpreta los bytes que llegan por el cable.
   std::function<void(bool utf8)> on_codificacion;
 
+  // A donde van las teclas del PC. Lo elige el usuario en el panel:
+  //   true  = UART (por defecto): se escribe en el monitor sin PuTTY, y los
+  //           programas que lean del UART reciben las teclas, como por el cable.
+  //   false = joystick: cursores/WASD/Espacio/Z/Ctrl mueven, como antes.
+  //
+  // Se resuelve con un selector y no tecla a tecla porque una asignacion fija
+  // es ambigua: si WASD fuera siempre al joystick, un programa que lo leyera
+  // por el UART no podria usarlo, y al reves.
+  bool teclado_uart() const { return teclado_uart_; }
+  std::function<void(bool uart)> on_teclado_destino;
+  // Un carácter tecleado que debe llegar al UART (solo en modo UART).
+  std::function<void(char c)> on_tecla_uart;
+
   // Listado a mostrar en el desplegable (lo rellena main.cpp).
   struct ArchivoSd {
     std::string nombre;
@@ -217,6 +230,7 @@ private:
   int scale_ = 3;
   int panel_w_ = 0;               // ancho del panel lateral (0 = sin panel)
   bool terminal_ = false;         // módulo del terminal activado
+  bool teclado_uart_ = true;      // teclas del PC -> UART (ver teclado_uart())
   Vista vista_ = Vista::Normal;   // modo de vista actual
   // Último estado del puerto 1 (lo pone main.cpp en cada fotograma).
   uint8_t port1_valor_ = 0xF8;
