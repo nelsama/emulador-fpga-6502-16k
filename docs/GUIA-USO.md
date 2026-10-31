@@ -854,6 +854,10 @@ Reproduce el Core de Vídeo: tilemap 64×32, atributos, patrones 2bpp planar,
 32 sprites con flip y escala 2×, 3 bandas de scroll y 32 entradas de paleta
 RGB444. La fuente C64 se carga al arrancar, como hace el FPGA en el setup.
 
+Los sprites siguen el **line buffer de 8 entradas** del core: manda el de
+**índice menor**, y el 9º que cruza una línea **no se dibuja** (ver «Sprites:
+gana el índice menor» más abajo).
+
 `tick_frame()` debe llamarse periódicamente: genera VBLANK en `$D803`. Si no se
 llama, los juegos que esperan `vc_wait_vblank()` se quedan en bucle.
 
@@ -963,6 +967,52 @@ en la placa.
 > dos escrituras. Con `clk_sys` a 6,75 MHz y un `STA` de 4 ciclos siempre hay
 > margen, y el emulador escribe en todas. No se modela porque no hay evidencia
 > de que un programa real escriba `$D815` en ciclos consecutivos.
+
+#### Sprites: gana el índice menor, y solo caben 8 por línea
+
+El core **no dibuja los 32 sprites uno sobre otro**. Tiene un *line buffer* de
+**8 entradas** (`NSL = 8` en `video_core.vhd`) que trabaja en dos fases:
+
+1. En el blanking de cada línea recorre el OAM y guarda en el buffer los
+   **primeros 8** sprites que la cruzan.
+2. En el barrido visible, para cada píxel busca en el buffer el **primer**
+   sprite que lo cubre (el de **menor índice**) y usa ese.
+
+De ahí salen dos reglas que sorprenden si vienes de otras consolas:
+
+| Regla | Consecuencia |
+|---|---|
+| **Gana el índice menor**, no el último dibujado | Un sprite de índice mayor **se recorta** contra el hueco del menor: por la parte que "sobra" se ve el **fondo**, nunca el otro sprite |
+| **Solo 8 sprites por línea** | El 9º y siguientes **no se dibujan**; solo activan `OVERFLOW` |
+
+Es decir: **entre sprites no hay prioridad configurable**. Si el objeto de
+índice menor es transparente en un píxel, ahí se ve **BG_COLOR** o el tile de
+fondo, aunque haya otro sprite tapándolo. Para cambiar quién manda, hay que
+**cambiar el orden de los sprites en el OAM** (el que deba verse delante, con
+índice menor).
+
+> **Esto no es transparencia entre sprites.** Un sprite no se "ve a través" de
+otro: el que queda delante es opaco en todos sus píxeles, y donde él no pinta
+(hueco o color 0) aparece el fondo. Lo que **sí** es transparente es el **color
+0** del propio sprite contra el fondo.
+>
+> **`PRIO` (bit 5 de `FLAGS`) no cambia esto.** Solo decide si el sprite va
+delante o detrás del **fondo**; entre sprites manda el índice.
+
+##### `OVERFLOW` (`$D803` bit 6)
+
+Se activa cuando en una línea hubo **más de 8 sprites** cruzándola y no cabían
+en el line buffer. Es un pestillo que se **rearma al principio de cada línea**
+(`h_cnt = 0` en el RTL) y se vuelve a subir si esa línea desborda; **leer `$D803`
+no lo limpia**, pero tampoco acumula entre líneas.
+
+Sirve como aviso de "estás poniendo demasiados sprites solapados en vertical":
+si se enciende, los que no entraron **no se ven**.
+
+> El emulador reproduce ambas reglas desde `929758c`, y `make test` las cubre
+> (`test_sprites_line_buffer`): el índice menor manda, un sprite transparente de
+> índice mayor no borra al menor, y `OVERFLOW` se activa con 9 sprites en una
+> línea pero no con 8.
 
 #### `SOLID_HIT`: colisión sprite ↔ tile sólido
 

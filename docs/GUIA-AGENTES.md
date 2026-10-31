@@ -341,6 +341,11 @@ la tarjeta o el nombre del fichero: **no es el código**.
   ratón ni consultas de estado del cursor.
 - La consola es **80×24 fija** (con scrollback interno), no redimensionable por
   el programa.
+- Los sprites **no** se pintan en orden sobreponiendo unos a otros: el core usa
+  un line buffer de 8 entradas y **gana el índice menor de OAM**; el 9º sprite de
+  una línea **no se dibuja** (solo sube `OVERFLOW`). Si un sprite "se ve a través"
+  de otro, el arte está mal ordenado en el OAM, no es un fallo del emulador.
+  Detalle en `GUIA-USO.md` §9 «Sprites: gana el índice menor».
 
 ---
 
