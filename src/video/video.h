@@ -120,6 +120,11 @@ private:
   // SOLID_HIT ($D803 bit 5): algún sprite toca una celda con el bit 4 del
   // atributo. Se recalcula entero al entrar en cada blanking.
   bool    solid_hit_ = false;
+  // SPRITE_OVERFLOW ($D803 bit 6): en la línea que se está barriendo hubo más
+  // de 8 sprites que la cruzaban y no cabían en el line buffer. En el RTL es un
+  // pestillo que se rearma al principio de CADA línea (`h_cnt = 0`), no por
+  // frame: refleja la última línea dibujada, no el histórico.
+  bool    sprite_overflow_ = false;
   // El barrido aún no se ha hecho, así que el primer tick SIEMPRE debe
   // ejecutarlo: el contador interno arranca fuera del blanking (status $10),
   // no dentro. Poner esto a false hace que el primer flanco cuente; el test

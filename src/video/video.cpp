@@ -94,7 +94,13 @@ bool Video::decodes(uint16_t addr) const {
 uint8_t Video::read(uint16_t addr, bool& resp) {
   resp = true;
   switch (addr) {
-    case 0xD803: return status_;         // STATUS
+    case 0xD803:                         // STATUS
+      // OVERFLOW se compone al leer: lo pone el barrido de render(), que es
+      // donde se llena el line buffer de verdad. status_ solo se refresca en
+      // tick_frame(), así que esperar a que pase ese tick daría un frame de
+      // retraso respecto al hardware.
+      status_ = (status_ & ~0x40) | (sprite_overflow_ ? 0x40 : 0x00);
+      return status_;
     case 0xD817: return setup_busy_;     // SETUP_ST
     default: resp = false; return 0;
   }
@@ -173,7 +179,8 @@ void Video::tick_frame() {
   if (vblank && !vblank_previo_) barrido_colision();
   vblank_previo_ = vblank;
 
-  status_ = (vblank ? 0x80 : 0x00) | (solid_hit_ ? 0x20 : 0x00) | 0x10;
+  status_ = (vblank ? 0x80 : 0x00) | (sprite_overflow_ ? 0x40 : 0x00) |
+            (solid_hit_ ? 0x20 : 0x00) | 0x10;
   if (setup_busy_ & 0x01) {
     // Fin del setup: ahora el core libera init_done y aplica el resultado.
     // Se hace AQUI y no al escribir $D816 para que las escrituras del CPU
@@ -430,6 +437,11 @@ void Video::render(uint32_t* out) {
   // BG_COLOR = paleta de fondo entrada 15.
   const uint32_t bg_color = rgb444_to_rgba(pal_[15]);
 
+  // OVERFLOW del frame anterior: en el RTL el pestillo se rearma al principio de
+  // cada línea (`h_cnt = 0`); aquí el equivalente por frame es limpiarlo antes
+  // de barrer y que lo suban las líneas que desborden.
+  sprite_overflow_ = false;
+
   for (int py = 0; py < H; py++) {
     // Determinar banda y scroll según línea.
     int band_scroll_x = scx;
@@ -484,60 +496,118 @@ void Video::render(uint32_t* out) {
     }
   }
 
-  // ---- Sprites (dibujados después del fondo) ----
-  for (int i = 0; i < 32; i++) {
-    int base = i * 5;
-    uint8_t x8 = oam_[base + 0];
-    uint8_t y8 = oam_[base + 1];
-    uint8_t tile = oam_[base + 2];
-    uint8_t flags = oam_[base + 3];
+  // ---- Sprites ----
+  //
+  // El hardware NO dibuja los 32 sprites uno sobre otro. video_core.vhd usa un
+  // LINE BUFFER (NSL = 8 entradas): en el blanking se recolectan los primeros 8
+  // sprites del OAM que cruzan la línea, y en el barrido visible se elige para
+  // cada píxel el PRIMER sprite de ese buffer que lo cubre (el de menor índice).
+  //
+  // De ahí salen dos reglas que hay que reproducir:
+  //   1. Entre sprites NO hay prioridad por orden de dibujo: gana el de índice
+  //      menor. Un sprite de índice mayor se recorta contra el hueco del
+  //      anterior y por ahí se ve el FONDO, nunca otro sprite.
+  //   2. En una línea con más de 8 sprites que la crucen, los sprites 9º y
+  //      siguientes NO SE DIBUJAN (el buffer está lleno); solo activan
+  //      OVERFLOW en $D803.
+  //
+  // Antes se pintaban los 32 en orden, así que el último tapaba al primero y
+  // los sprites se veían unos a través de otros, cosa que el chip no hace.
+  {
+    // Candidatos de una línea del line buffer, en orden de índice (el RTL los
+    // guarda recorriendo el OAM de 0 a 31, así que el orden del buffer es el de
+    // índice creciente).
+    struct Entrada {
+      int x;        // X en pantalla (9 bits)
+      int y;        // Y en pantalla (byte del OAM, ya filtrado >= 248)
+      int width;    // 8 u 16 px segun SCALE2X
+      bool prio;
+      int tile;
+      bool flip_x, flip_y;
+      bool scale2x;
+      uint8_t spal;
+    };
 
-    if (y8 >= 248) continue; // deshabilitado
+    for (int py = 0; py < H; py++) {
+      Entrada lb[8];
+      int n = 0;
+      bool overflow = false;
 
-    int x = x8 | ((flags & 0x04) ? 0x100 : 0);
-    int y = y8;
-    bool flip_y = flags & 0x80;
-    bool flip_x = flags & 0x40;
-    bool prio = flags & 0x20;
-    bool scale2x = flags & 0x10;
-    uint8_t spal = flags & 0x03;
-
-    int dx = scale2x ? 16 : 8;
-    int dy = scale2x ? 16 : 8;
-
-    for (int py = 0; py < dy; py++) {
-      int sy = (y + py);
-      if (sy < 0 || sy >= H) continue;
-      for (int px = 0; px < dx; px++) {
-        int sx = (x + px);
-        if (sx < 0 || sx >= W) continue;
-
-        int fx = scale2x ? (px / 2) : px;
-        int fy = scale2x ? (py / 2) : py;
-        if (flip_x) fx = 7 - fx;
-        if (flip_y) fy = 7 - fy;
-
-        int word = tile * 16 + fy * 2;
-        uint8_t p0 = sppat_[word];
-        uint8_t p1 = sppat_[word + 1];
-        int bit = 7 - fx;
-        int c0 = (p0 >> bit) & 1;
-        int c1 = (p1 >> bit) & 1;
-        uint8_t color = (uint8_t)((c1 << 1) | c0);
-
-        if (color == 0) continue; // transparente
-
-        uint16_t pal = ((uint16_t)spal << 2) | color;
-        uint32_t pixel = rgb444_to_rgba(pal_[16 + pal]);
-
-        // PRIO = 1 -> detrás del fondo (sólo se dibuja si el fondo ahí es
-        // transparente / BG_COLOR). Simplificación: lo dibujamos siempre por
-        // encima salvo que PRIO=1 y el pixel de fondo no sea BG_COLOR.
-        if (prio) {
-          uint32_t& bgpx = out[sy * W + sx];
-          if (bgpx != bg_color) continue; // fondo no transparente -> no dibujar
+      // Fase 1 (equivalente al blanking): recolectar los sprites que cruzan
+      // esta línea, en orden de índice, hasta llenar el buffer.
+      for (int i = 0; i < 32; i++) {
+        const uint8_t* o = &oam_[i * 5];
+        const uint8_t y8 = o[1];
+        const uint8_t flags = o[3];
+        const bool s2x = (flags & 0x10) != 0;
+        const int span = s2x ? 16 : 8;
+        // Y >= 248 desactiva el DIBUJADO (el barrido de colisión sí los ve).
+        if (y8 >= 248) continue;
+        if (!(y8 <= py && y8 + span > py)) continue;
+        if (n >= 8) {
+          overflow = true;  // el buffer está lleno: no entra y no se dibuja
+          continue;
         }
-        out[sy * W + sx] = pixel;
+        Entrada& e = lb[n++];
+        e.x = o[0] | ((flags & 0x04) ? 0x100 : 0);
+        e.y = y8;
+        e.width = span;
+        e.tile = o[2] & 0x3F;
+        e.prio = (flags & 0x20) != 0;
+        e.flip_x = (flags & 0x40) != 0;
+        e.flip_y = (flags & 0x80) != 0;
+        e.scale2x = s2x;
+        e.spal = flags & 0x03;
+      }
+      // Igual que `overflow_f` en el RTL: el pestillo se rearma al principio de
+      // cada línea y se mantiene si esa línea desborda. Aquí solo se sube (nunca
+      // se baja dentro de un mismo frame); el reset por línea lo da el RTL con
+      // `h_cnt = 0`, y en el modelo por frame eso equivale a limpiarlo al final.
+      if (overflow) sprite_overflow_ = true;
+
+      // Fase 2 (barrido visible): para cada píxel, el PRIMER sprite del buffer
+      // que lo cubre decide, igual que el "found" del RTL. Los siguientes NO
+      // se pintan encima: si el elegido es transparente en ese píxel, se ve el
+      // fondo, no otro sprite.
+      for (int px = 0; px < W; px++) {
+        const Entrada* pick = nullptr;
+        for (int k = 0; k < n; k++) {
+          if (lb[k].x <= px && lb[k].x + lb[k].width > px) {
+            pick = &lb[k];
+            break;
+          }
+        }
+        if (!pick) continue;
+
+        const int ox = px - pick->x;
+        // Fila del patrón: el RTL la calcula al recolectar, dividiendo por 2 en
+        // 2x (y aplicando FLIP_Y después de escalar).
+        int fy = pick->scale2x ? ((py - pick->y) / 2) : (py - pick->y);
+        int fx = pick->scale2x ? (ox / 2) : ox;
+        if (pick->flip_x) fx = 7 - fx;
+        if (pick->flip_y) fy = 7 - fy;
+
+        const int word = pick->tile * 16 + fy * 2;
+        const uint8_t p0 = sppat_[word];
+        const uint8_t p1 = sppat_[word + 1];
+        const int bit = 7 - fx;
+        const int c0 = (p0 >> bit) & 1;
+        const int c1 = (p1 >> bit) & 1;
+        const uint8_t color = (uint8_t)((c1 << 1) | c0);
+
+        if (color == 0) continue;  // transparente: se queda el fondo
+
+        const uint16_t pal = ((uint16_t)pick->spal << 2) | color;
+        const uint32_t pixel = rgb444_to_rgba(pal_[16 + pal]);
+
+        // PRIO = 1 -> detrás del fondo: solo se pinta donde el fondo es
+        // transparente (el RTL compara con pixcode /= "00", y ahí el frame ya
+        // tiene BG_COLOR).
+        if (pick->prio) {
+          uint32_t& bgpx = out[py * W + px];
+          if (bgpx != bg_color) continue;
+        }
+        out[py * W + px] = pixel;
       }
     }
   }

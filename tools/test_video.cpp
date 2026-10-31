@@ -390,6 +390,81 @@ static void test_scroll_vertical_ancho() {
   check(fc == fd, "scroll_y: 2047 y 255 dibujan lo mismo");
 }
 
+// El hardware resuelve el solapamiento con un LINE BUFFER de 8 entradas
+// (video_core.vhd, NSL = 8), no dibujando los sprites en orden:
+//   - gana el sprite de MENOR INDICE que cubre el píxel, y los demás no se
+//     pintan encima (si el elegido es transparente se ve el fondo, no el otro);
+//   - a partir del 9º sprite que cruza una línea, el resto no se dibuja.
+static void test_sprites_line_buffer() {
+  Video v;
+  bool resp = false;
+  std::vector<uint32_t> frame((size_t)Video::W * Video::H, 0);
+
+  // Patrón de prueba: el tile 1 con todos los píxeles encendidos (color 3).
+  // Formato de la VRAM de patrones de sprite: area 11 (HI=$C0), bit3=1 y
+  // direccion d = patron*8 + fila; el plano va en el bit 5 del registro alto.
+  auto patron_lleno = [&](int patron) {
+    for (int fila = 0; fila < 8; fila++) {
+      for (int plano = 0; plano < 2; plano++) {
+        v.write(0xD800, (uint8_t)(patron * 8 + fila), resp);
+        v.write(0xD801, (uint8_t)(0xC0 | 0x08 | (plano ? 0x20 : 0x00)), resp);
+        v.write(0xD802, 0xFF, resp);
+      }
+    }
+  };
+  patron_lleno(1);
+
+  // Paleta de sprite: entrada 16+p = colores de la paleta 0 de sprite. Se deja
+  // la de por defecto; basta con comparar el píxel entre dos renders.
+
+  limpiar_atributos(v);
+  limpiar_oam(v);
+
+  // Dos sprites de 8x8 solapados en el mismo píxel (0,0).
+  // El sprite 0 va a 2x (16x16) para cubrir más y el 1 a 1x.
+  const int x0 = 0, y0 = 0;
+  poner_sprite(v, 0, x0, y0, 1, 0x00, 0x00);  // índice menor, tile 1
+  poner_sprite(v, 1, x0, y0, 1, 0x00, 0x00);  // índice mayor, mismo sitio
+  v.render(frame.data());
+  const uint32_t con_dos = frame[0];
+
+  // Con solo el sprite 1 el píxel debe salir IDÉNTICO: el sprite 0 es el que
+  // gana (mismo tile, así que el color coincide; lo que importa es que el 1 no
+  // se pinte encima, que antes lo hacía con otro tile/color).
+  limpiar_oam(v);
+  poner_sprite(v, 1, x0, y0, 1, 0x00, 0x00);
+  v.render(frame.data());
+  check(frame[0] == con_dos, "sprites: el índice menor manda (el 1 no tapa al 0)");
+
+  // Y lo que NO debe pasar: que el sprite de índice mayor tape al menor.
+  // Se comprueba con tiles distintos: 0 lleno y 1 distinto (vacío).
+  limpiar_oam(v);
+  poner_sprite(v, 0, x0, y0, 1, 0x00, 0x00);  // lleno
+  poner_sprite(v, 1, x0, y0, 0, 0x00, 0x00);  // vacío (transparente)
+  v.render(frame.data());
+  const uint32_t solo_0 = frame[0];
+  limpiar_oam(v);
+  poner_sprite(v, 0, x0, y0, 1, 0x00, 0x00);
+  v.render(frame.data());
+  check(frame[0] == solo_0,
+        "sprites: uno transparente de índice mayor no borra al de índice menor");
+
+  // Overflow: 9 sprites en la misma línea. El 9º (índice 8) no entra en el
+  // buffer de 8 y no se dibuja; además debe activarse OVERFLOW en $D803 bit 6.
+  limpiar_oam(v);
+  for (int i = 0; i < 9; i++) poner_sprite(v, i, 40 + i * 8, 0, 1, 0x00, 0x00);
+  v.render(frame.data());
+  const uint8_t st = v.read(0xD803, resp);
+  check((st & 0x40) != 0, "sprites: 9 en una línea activan OVERFLOW (bit 6)");
+
+  // Con 8 justos no hay overflow.
+  limpiar_oam(v);
+  for (int i = 0; i < 8; i++) poner_sprite(v, i, 40 + i * 8, 0, 1, 0x00, 0x00);
+  v.render(frame.data());
+  const uint8_t st8 = v.read(0xD803, resp);
+  check((st8 & 0x40) == 0, "sprites: 8 en una línea no activan OVERFLOW");
+}
+
 int main() {
   std::printf("test_video: Core de Video\n");
   test_paleta_satura();
@@ -400,6 +475,7 @@ int main() {
   test_solid_hit_banda();
   test_scroll_vertical_ancho();
   test_barrido();
+  test_sprites_line_buffer();
   if (fallos) {
     std::printf("test_video: %d FALLOS\n", fallos);
     return 1;
