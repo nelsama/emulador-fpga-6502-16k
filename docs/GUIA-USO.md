@@ -156,6 +156,20 @@ En Windows, `run.bat` y `run_debug.bat` con los mismos argumentos.
 El lanzador añade `/ucrt64/bin` al `PATH`, compila si falta el `.exe` o si las
 fuentes son más nuevas, y muestra un resumen antes de arrancar.
 
+> ⚠️ **Solo puede haber un emulador por puerto de UART.** Si abres `run.bat`
+> con la otra ventana aún abierta, el segundo **no** arranca y lo dice:
+>
+> ```
+> ERROR: no se pudo abrir el UART en el puerto 4000.
+> Seguramente ya hay otro emulador en marcha usando ese puerto.
+>   - Cierra la otra ventana del emulador, o
+>   - usa otro puerto:  run.bat 4001
+> ```
+>
+> Antes esto no se detectaba: en Windows `SO_REUSEADDR` deja que el segundo
+> proceso se enganche a un puerto ya escuchando, así que abría su ventana como si
+> nada y el UART lo atendía el primero (el segundo parecía "pegado").
+
 ### Directo
 
 ```bash

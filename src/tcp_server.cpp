@@ -43,7 +43,21 @@ bool TcpServer::start(int port) {
   if (listen_ == INVALID_SOCKET) return false;
 
   int one = 1;
+#ifdef _WIN32
+  // En Windows SO_REUSEADDR NO significa "reusar un puerto en TIME_WAIT":
+  // permite que un segundo proceso se ENGANCHÉ a un puerto que ya está
+  // escuchando. bind() NO falla, el segundo emulador cree que escucha y sigue
+  // arrancando, pero las conexiones las atiende el primero. Resultado: se abren
+  // dos ventanas, una de ellas sin UART, y cuesta darse cuenta.
+  //
+  // Lo que hace falta en Windows es SO_EXCLUSIVEADDRUSE: bind() falla si el
+  // puerto está ocupado, que es lo que se quiere. En POSIX sí vale REUSEADDR
+  // (permite reabrir tras cerrar sin esperar al TIME_WAIT).
+  setsockopt(listen_, SOL_SOCKET, SO_EXCLUSIVEADDRUSE, (const char*)&one,
+             sizeof(one));
+#else
   setsockopt(listen_, SOL_SOCKET, SO_REUSEADDR, (const char*)&one, sizeof(one));
+#endif
 
   sockaddr_in addr{};
   addr.sin_family = AF_INET;

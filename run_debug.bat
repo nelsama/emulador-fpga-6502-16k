@@ -50,6 +50,12 @@ echo            /state.txt   GPIO, SID, video, UART
 echo ============================================================
 
 "emulador.exe" "rom\monitor.bin" %PORT% "%IMAGE%" --debug=%DEBUG_PORT%
+REM Si sale con error (puerto ocupado por otra ventana), dejar leer el mensaje.
+if errorlevel 1 (
+  echo.
+  echo El emulador termino con error ^(ver el mensaje de arriba^).
+  pause
+)
 goto :eof
 
 :error

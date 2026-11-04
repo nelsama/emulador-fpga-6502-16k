@@ -179,7 +179,14 @@ int main(int argc, char** argv) {
   server.on_tx_dequeue   = [&uart]() { return uart.dequeue_tx(); };
 
   if (!server.start(port)) {
-    std::fprintf(stderr, "No se pudo abrir el servidor TCP en %d\n", port);
+    // Este es el fallo más común al lanzar el emulador: ya hay otro abierto en
+    // el mismo puerto. Se explica en vez de salir con un "No se pudo abrir".
+    std::fprintf(stderr,
+                 "\nERROR: no se pudo abrir el UART en el puerto %d.\n"
+                 "Seguramente ya hay otro emulador en marcha usando ese puerto.\n"
+                 "  - Cierra la otra ventana del emulador, o\n"
+                 "  - usa otro puerto:  run.bat %d\n",
+                 port, port + 1);
     return 1;
   }
 

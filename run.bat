@@ -44,6 +44,13 @@ echo   Debug  : no (usa run_debug.bat para activarlo)
 echo ============================================================
 
 "emulador.exe" "rom\monitor.bin" %PORT% "%IMAGE%" %EXTRA%
+REM Si el emulador sale con error (p. ej. el puerto 4000 ya está ocupado por
+REM otra ventana), la consola se cerraria de golpe y el mensaje no se leeria.
+if errorlevel 1 (
+  echo.
+  echo El emulador termino con error ^(ver el mensaje de arriba^).
+  pause
+)
 goto :eof
 
 :error
