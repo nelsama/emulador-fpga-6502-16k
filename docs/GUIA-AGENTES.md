@@ -369,9 +369,18 @@ reexpande la fuente.
 > hay que **escribirlos** en vez de asumir que arrancan vacíos. Igual pasa con
 > los **tiles de fondo 0–7**.
 >
+> ⚠️ **El setup BORRA ese arte**: recorre esas mismas fases escribiendo ceros, así
+> que deja a cero los tiles de fondo 0–7 y los patrones de sprite 0–2. Recárgalos
+> después del setup si los usas.
+>
 > **Espera `VIDEO_READY`** (bit 4 de `$D803`) antes de escribir: durante el
 > arranque y mientras dure un setup `$D816` el core **ignora** las escrituras del
 > CPU a la VRAM.
+
+El color del trazo de la fuente lo elige `$D818` (0–3): 0 = invisible, 1, 2 y 3
+(el blanco por defecto, 3). **Escribirlo no repinta**: hay que disparar SETUP
+(`$D816`) para reexpandir la fuente — y ese SETUP borra la VRAM, así que es algo
+para fijar al arrancar, no en caliente.
 
 > La **cara** que se ve arriba a la izquierda al arrancar viene de ahí: el OAM
 > empieza a cero y el sprite 0 queda en (0,0) con el patrón 0. En un monitor
