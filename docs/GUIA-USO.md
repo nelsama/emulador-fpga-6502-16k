@@ -244,6 +244,7 @@ pantalla sin intervención humana**.
 
 | Ruta | Tipo | Contenido |
 |---|---|---|
+| **`POST /run?name=X.BIN&addr=0800`** | texto | **Reinicia, carga y ejecuta** (cuerpo = binario). Equivale al botón `RUN` |
 | `/` | HTML | Índice con vista previa del vídeo (se refresca sola) + panel de estado en vivo |
 | `/screen.png` | PNG | **Último frame presentado** (320×240): lo que se vio de verdad |
 | `/screen.png?scale=2` | PNG | La misma captura ampliada ×2, ×3 o ×4 (útil para leer texto) |

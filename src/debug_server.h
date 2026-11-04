@@ -45,6 +45,22 @@ public:
   // CPU para incluir PC/registros en /state.txt. nullptr = sin datos de CPU.
   void set_cpu(class Cpu6502* cpu) { cpu_ = cpu; }
 
+  // Comandos que hay que inyectar al UART más adelante, con su instante.
+  //
+  // El `/run` necesita mandar `LOAD` y luego `R` separados en el tiempo: el
+  // monitor tarda en arrancar (~0,3 s), en releer el directorio si se acaba de
+  // escribir un archivo, y en leer el binario por SPI. Enviarlos de golpe hacía
+  // que el `R` se perdiera o que el LOAD no encontrara el archivo.
+  // `main.cpp` los inyecta cuando vence cada plazo.
+  struct ComandoDiferido {
+    long long cuando;
+    std::string cmd;
+  };
+  void programar_comando(long long cuando, std::string cmd);
+  bool hay_comandos_pendientes() const { return !diferidos_.empty(); }
+  // Saca el primero cuyo plazo ya venció. Devuelve false si no hay ninguno.
+  bool tomar_comando_vencido(long long ahora, std::string* cmd);
+
 private:
   struct Conn;
   struct Response {
@@ -61,6 +77,13 @@ private:
   std::string index_html() const;
 
   static long long now_ms();
+public:
+  // Milisegundos desde el arranque del sistema (GetTickCount). Es la base en
+  // que se expresan los plazos de los comandos diferidos; main.cpp lo usa para
+  // saber cuándo hay que inyectarlos.
+  static long long ms_ahora() { return now_ms(); }
+
+private:
 
   static constexpr long long kInvalid = -1;
   long long listen_ = kInvalid;  // socket de escucha IPv4 (127.0.0.1)
@@ -73,4 +96,5 @@ private:
   std::string cuerpo_peticion_;
   Response resp_;
   std::vector<std::unique_ptr<Conn>> conns_;
+  std::vector<ComandoDiferido> diferidos_;  // ver programar_comando()
 };

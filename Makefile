@@ -123,12 +123,16 @@ run: $(BIN)
 	./$(BIN) rom/monitor.bin 4000 tarjeta.img
 
 # Pruebas rápidas (no necesitan SDL ni abrir ventana).
-test: test_terminal.exe test_gpio_flag.exe test_video.exe test_sd_nombre.exe test_tcp_puerto.exe
+test: test_terminal.exe test_gpio_flag.exe test_video.exe test_sd_nombre.exe test_tcp_puerto.exe test_run.exe
 	./test_terminal.exe
 	./test_gpio_flag.exe
 	./test_video.exe
 	./test_sd_nombre.exe
 	./test_tcp_puerto.exe
+	./test_run.exe
+
+test_run.exe: tools/test_run.cpp src/sd_card.cpp src/sd_card.h
+	$(CXX) -std=c++17 -O2 -Wall -Isrc -o $@ tools/test_run.cpp src/sd_card.cpp
 
 test_gpio_flag.exe: tools/test_gpio_flag.cpp src/gpio_uart.cpp src/gpio_uart.h src/device.h
 	$(CXX) -std=c++17 -O2 -Wall -Isrc -o $@ tools/test_gpio_flag.cpp src/gpio_uart.cpp

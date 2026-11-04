@@ -206,6 +206,38 @@ std::string normalizar_nombre(const std::string& in) {
 
 }  // namespace
 
+std::string SdCardImpl::resolver_nombre(const std::string& pedido) const {
+  auto normaliza = [](const std::string& in) {
+    // Misma regla que normalizar_nombre: base 8 + punto + extensión 3, mayúsculas.
+    std::string base = in, ext;
+    const size_t p = in.find_last_of('.');
+    if (p != std::string::npos) {
+      base = in.substr(0, p);
+      ext = in.substr(p + 1);
+    }
+    if (base.size() > 8) base.resize(8);
+    if (ext.size() > 3) ext.resize(3);
+    for (auto& c : base) {
+      if (c >= 'a' && c <= 'z') c = (char)(c - 32);
+    }
+    for (auto& c : ext) {
+      if (c >= 'a' && c <= 'z') c = (char)(c - 32);
+    }
+    return ext.empty() ? base : base + "." + ext;
+  };
+
+  const auto lista = listar_archivos();
+  for (const auto& ent : lista) {
+    if (ent.nombre == pedido) return pedido;
+  }
+  // El monitor solo conoce el nombre ya normalizado a 8.3.
+  const std::string corto = normaliza(pedido);
+  for (const auto& ent : lista) {
+    if (ent.nombre == corto) return ent.nombre;
+  }
+  return pedido;
+}
+
 uint32_t SdCardImpl::espacio_libre() const {
   if (!mounted_ || img_.size() < 512) return 0;
   const uint32_t libre = get16(img_.data() + 6);
@@ -292,9 +324,15 @@ bool SdCardImpl::agregar_archivo(const std::string& nombre_in,
   std::memset(img_.data() + off + datos.size(), 0, fin - off - datos.size());
 
   // Entrada de la tabla.
+  //
+  // El campo del nombre son 12 bytes. "BASE(8).EXT(3)" ocupa exactamente 12 y
+  // el monitor lo lee sin exigir NUL, así que cabe. Lo que NO se puede es
+  // escribir más de 12 ni dejar que el nombre pise el sector inicial (+12/+13):
+  // aquí se recorta a 12 por si el nombre llegara más largo.
   uint8_t* e = img_.data() + kTablaOffset + slot * kEntradaBytes;
   std::memset(e, 0, kEntradaBytes);
-  std::memcpy(e, nombre.data(), nombre.size());
+  const size_t n_bytes = nombre.size() < 12 ? nombre.size() : 12;
+  std::memcpy(e, nombre.data(), n_bytes);
   put16(e + 12, (uint16_t)inicio);
   put16(e + 14, (uint16_t)datos.size());
   put16(e + 16, (uint16_t)sectores);

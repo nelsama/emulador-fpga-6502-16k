@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "bus.h"
+#include "cpu_6502.h"
 #include "debug_dump.h"
 #include "sd_card.h"
 #include "spi_sd.h"
@@ -362,6 +363,17 @@ bool DebugServer::step(Conn& c) {
 // Rutas
 // ---------------------------------------------------------------------------
 
+void DebugServer::programar_comando(long long cuando, std::string cmd) {
+  diferidos_.push_back(ComandoDiferido{cuando, std::move(cmd)});
+}
+
+bool DebugServer::tomar_comando_vencido(long long ahora, std::string* cmd) {
+  if (diferidos_.empty() || !cmd || diferidos_.front().cuando > ahora) return false;
+  *cmd = std::move(diferidos_.front().cmd);
+  diferidos_.erase(diferidos_.begin());
+  return true;
+}
+
 void DebugServer::build_response(Conn& /*c*/, const std::string& head) {
   resp_ = Response{};
   resp_.status = "200 OK";
@@ -605,6 +617,125 @@ void DebugServer::build_response(Conn& /*c*/, const std::string& head) {
       resp_.body = "sin UART" + NL;
     }
 
+  } else if (path == "/run") {
+    // Ejecuta un programa de la SD con una sola petición. Es el equivalente
+    // HTTP del botón RUN de la ventana, pensado para un agente que compila y
+    // quiere probar sin abrir PuTTY ni esperar a mano entre `LOAD` y `R`.
+    //
+    //   GET/POST /run?name=JUEGO.BIN[&addr=0800]
+    //
+    // Si el cuerpo del POST trae datos, primero se escribe en la SD con ese
+    // nombre (y se remonta): así el agente manda el binario recién compilado y
+    // lo ejecuta en el mismo paso.
+    //
+    // Secuencia, igual que el botón:
+    //   1. (si hay cuerpo) agregar el archivo a la SD + `sd` al monitor
+    //   2. CPU reset + vaciar la FIFO de recepción
+    //   3. `LOAD <nombre> <addr>` al UART
+    //   4. `R <addr>` a los 800 ms (ver programar_comando_diferido)
+    //
+    // El reset es imprescindible para que funcione dos veces seguidas: si ya
+    // hay un juego en marcha, nadie lee el UART y el LOAD se quedaría en la FIFO.
+    // Es lo mismo que pulsar RESET en el panel.
+    if (!cpu_ || !bus_->uart()) {
+      resp_.status = "503 Service Unavailable";
+      resp_.body = "sin CPU o sin UART" + NL;
+      return;
+    }
+
+    auto param = [&](const char* clave) -> std::string {
+      const std::string k = std::string(clave) + "=";
+      const size_t p = query.find(k);
+      if (p == std::string::npos) return "";
+      std::string v = query.substr(p + k.size());
+      const size_t amp = v.find('&');
+      if (amp != std::string::npos) v = v.substr(0, amp);
+      return v;
+    };
+
+    std::string nombre = param("name");
+    std::string dir = param("addr");
+    if (dir.empty()) dir = "0800";
+
+    // Dirección: hexa de 1 a 4 dígitos dentro de la RAM ($0000-$3FFF).
+    bool ok_dir = !dir.empty() && dir.size() <= 4;
+    unsigned dirv = 0;
+    for (char ch : dir) {
+      int d;
+      if (ch >= '0' && ch <= '9') d = ch - '0';
+      else if (ch >= 'A' && ch <= 'F') d = ch - 'A' + 10;
+      else if (ch >= 'a' && ch <= 'f') d = ch - 'a' + 10;
+      else { ok_dir = false; break; }
+      dirv = dirv * 16u + (unsigned)d;
+    }
+    if (!ok_dir || dirv > 0x3FFF) {
+      resp_.status = "400 Bad Request";
+      resp_.body = "direccion invalida: tiene que ser hexa de 0000 a 3FFF" + NL;
+      return;
+    }
+    char dir_txt[8];
+    std::snprintf(dir_txt, sizeof dir_txt, "%04X", dirv);
+
+    // 1) Si el POST trae el binario, se escribe en la SD antes de lanzarlo.
+    std::string escrito;
+    if (!cuerpo_peticion_.empty()) {
+      if (!sd_ || !sd_->montada()) {
+        resp_.status = "503 Service Unavailable";
+        resp_.body = "sin tarjeta SD: manda name= o arranca con tarjeta.img" + NL;
+        return;
+      }
+      if (nombre.empty()) {
+        resp_.status = "400 Bad Request";
+        resp_.body = "uso: POST /run?name=NOMBRE.BIN&addr=0800 (cuerpo = datos)" + NL;
+        return;
+      }
+      std::string err;
+      const std::vector<uint8_t> datos(cuerpo_peticion_.begin(), cuerpo_peticion_.end());
+      if (!sd_->agregar_archivo(nombre, datos, &err)) {
+        resp_.status = "409 Conflict";
+        resp_.body = "ERROR al escribir en la SD: " + err + NL;
+        return;
+      }
+      escrito = "escrito en la SD: " + nombre + " (" + std::to_string(datos.size()) +
+                " bytes)" + NL;
+      // El nombre en la tarjeta puede haberse RECORTADO a 8.3: el monitor solo
+      // conoce ese y, con el largo, responde "No encontrado".
+      const std::string real = sd_->resolver_nombre(nombre);
+      if (real != nombre) {
+        nombre = real;
+        escrito += "nombre en la SD (recortado a 8.3): " + nombre + NL;
+      }
+    }
+
+    if (nombre.empty()) {
+      resp_.status = "400 Bad Request";
+      resp_.body = "uso: GET/POST /run?name=NOMBRE.BIN[&addr=0800]" + NL;
+      return;
+    }
+
+    // 2) Reset de la máquina y FIFO limpia (como el botón RESET).
+    cpu_->reset();
+    bus_->uart()->reset_rx();
+
+    // 3) Secuencia completa, con un plazo por paso (los consume main.cpp):
+    //
+    //    t=0     `sd` si se acaba de escribir (el monitor cachea el directorio,
+    //            pero el reset lo vacía: el remontaje va DESPUÉS)
+    //    t=300   `LOAD <nombre> <addr>`
+    //    t=1100  `R <addr>`
+    //
+    // Manda todo de golpe no funciona: el monitor aún está arrancando (~0,3 s
+    // inicializando la SD) y necesita tiempo para leer el binario por SPI.
+    if (!escrito.empty()) programar_comando(now_ms(), std::string("sd\r"));
+    const long long t_load = escrito.empty() ? 0 : 400;
+    programar_comando(now_ms() + t_load, "LOAD " + nombre + " " + dir_txt + "\r");
+    programar_comando(now_ms() + t_load + 800, std::string("R ") + dir_txt + "\r");
+
+    resp_.body = escrito + "RESET + LOAD " + nombre + " " + dir_txt +
+                 " + R (en 800 ms)" + NL +
+                 "para verlo: /console.txt o /screen.png" + NL;
+    std::printf("HTTP /run: %s en %s\n", nombre.c_str(), dir_txt);
+
   } else if (path == "/uart") {
     // Inyecta texto en el UART como si llegara de PuTTY.
     //
@@ -775,7 +906,8 @@ void DebugServer::build_response(Conn& /*c*/, const std::string& head) {
         "  /vram.txt        tilemap + atributos + OAM en texto\n"
         "  /vram.json       tilemap + atributos + OAM en JSON\n"
         "  /state.txt       LEDs, SID, CPU, estado\n"
-        "  /ram.bin?start=0&len=16384  volcado de RAM\n";
+        "  /ram.bin?start=0&len=16384  volcado de RAM\n"
+        "  /run?name=X.BIN&addr=0800  resetea, carga y ejecuta (cuerpo = binario)\n";
   }
 }
 

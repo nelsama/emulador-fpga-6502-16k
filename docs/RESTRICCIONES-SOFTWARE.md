@@ -35,10 +35,10 @@ un tope de 64 KB).
   no llegue al programa siguiente.
 - Si el programa es un juego sin teclado, no esperes a que devuelva el control
   al monitor: el reset es la única salida. Por eso el botón existe.
-- **No hay endpoint HTTP para el reset.** Desde un script o un agente no se
-  puede reiniciar la máquina: `/uart?cmd=Q` tampoco sirve si el programa ya no
-  lee el UART (el `Q` se queda en la FIFO). Solo `/uart?cmd=...` funciona
-  mientras el monitor siga al mando.
+- **No hay endpoint HTTP para el reset en sí**, pero `POST /run` reinicia la
+  máquina como parte de la secuencia: es la forma de recuperar el control desde
+  un script (vuelve al monitor, limpia la FIFO y carga el programa que le
+  pidas). `/uart?cmd=Q` **no** sirve si el programa ya no lee el UART.
 
 **Por qué es así.** Es fiel al hardware: la salida del programa no reinicia la
 CPU, y `Q` es un comando que atiende el **monitor**, no el sistema.

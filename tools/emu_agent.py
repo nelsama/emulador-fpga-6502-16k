@@ -14,6 +14,7 @@ Uso:
     python tools/emu_agent.py screenshot salida.png
     python tools/emu_agent.py load PACMAN.BIN 0800
     python tools/emu_agent.py run 0800
+    python tools/emu_agent.py runfile JUEGO.BIN 0800 JUEGO.BIN
     python tools/emu_agent.py state
     python tools/emu_agent.py stop
 
@@ -150,9 +151,11 @@ def http(debug: int, ruta: str) -> bytes:
 def main() -> int:
     p = argparse.ArgumentParser(description="Controla el emulador desde un script.")
     p.add_argument("accion", choices=[
-        "start", "stop", "status", "screenshot", "load", "run", "state", "vram", "ram"])
+        "start", "stop", "status", "screenshot", "load", "run", "runfile", "state",
+        "vram", "ram"])
     p.add_argument("arg1", nargs="?", help="argumento (fichero, dirección, ...)")
     p.add_argument("arg2", nargs="?", help="segundo argumento (dirección)")
+    p.add_argument("arg3", nargs="?", help="tercer argumento (nombre en la SD)")
     p.add_argument("--uart", type=int, default=4000)
     p.add_argument("--debug", type=int, default=8080)
     p.add_argument("--sd", default="tarjeta.img")
@@ -192,6 +195,23 @@ def main() -> int:
     elif a.accion == "run":
         addr = a.arg1 or "0800"
         print(enviar(a.uart, f"r {addr}", 1.5).strip())
+    elif a.accion == "runfile":
+        # Compila y prueba en un paso: manda el binario y lo ejecuta por HTTP
+        # (POST /run). No hace falta abrir el socket del UART ni esperar entre
+        # LOAD y R, y reinicia la maquina aunque haya un juego en marcha.
+        if not a.arg1:
+            print("Uso: runfile <fichero> [direccion] [nombre-en-sd]", file=sys.stderr)
+            return 2
+        datos = open(a.arg1, "rb").read()
+        nombre = (a.arg3 or os.path.basename(a.arg1)).upper()
+        addr = (a.arg2 or "0800")
+        rst = urllib.request.urlopen(
+            urllib.request.Request(
+                f"http://127.0.0.1:{a.debug}/run?name={nombre}&addr={addr}",
+                data=datos, method="POST"), timeout=20).read().decode()
+        print(rst.strip())
+        time.sleep(2.0)
+        print(http(a.debug, "/console.txt").decode(errors="replace").rstrip()[-300:])
     elif a.accion == "state":
         print(http(a.debug, "/state.txt").decode(errors="replace"))
     elif a.accion == "vram":

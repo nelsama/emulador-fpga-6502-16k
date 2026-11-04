@@ -52,6 +52,11 @@ public:
   bool renombrar_archivo(const std::string& viejo, const std::string& nuevo,
                          std::string* error = nullptr);
   std::vector<Entrada> listar_archivos() const;
+  // Nombre real en la tabla para un nombre pedido: si no está tal cual, busca
+  // uno cuya base coincide (el recorte a 8.3 deja `MIPRUEBA.BIN` como
+  // `MIPRUEBA.BI`, y el monitor solo conoce el corto). Devuelve `pedido` si no
+  // hay ninguno.
+  std::string resolver_nombre(const std::string& pedido) const;
   // Lee el contenido de un archivo de la imagen (para verificarlo por HTTP).
   // Devuelve false si no está montada o el archivo no existe.
   bool leer_archivo(const std::string& nombre, std::vector<uint8_t>* datos,

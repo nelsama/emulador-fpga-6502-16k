@@ -82,6 +82,7 @@ emulador desacoplado y espera a que responda:
 
 ```bash
 python tools/emu_agent.py start       # arranca y espera
+python tools/emu_agent.py runfile JUEGO.BIN 0800 JUEGO.BIN   # compila y prueba en un paso
 python tools/emu_agent.py load PACMAN.BIN 0800
 python tools/emu_agent.py run 0800
 python tools/emu_agent.py screenshot pantalla.png

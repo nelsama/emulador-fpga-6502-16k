@@ -172,6 +172,7 @@ debería cerrar con `shutdown(SHUT_WR)`.
 
 | Endpoint | Para qué |
 |---|---|
+| **`POST /run?name=X.BIN&addr=0800`** | **Reinicia, carga y ejecuta en un paso** (cuerpo = binario). Es el equivalente del botón RUN |
 | `/console.txt` | **Lo más útil** para programas de texto: la pantalla de 80×24 en texto plano |
 | `/console.png` | Captura de la consola con colores (640×384), `?scale=2..4` |
 | `/sdcard/ls` | Archivos de la SD y espacio libre |
@@ -186,6 +187,40 @@ debería cerrar con `shutdown(SHUT_WR)`.
 | `/vram.json` | Lo mismo, estructurado |
 | `/state.txt` | CPU (PC, registros, flags, ciclos), GPIO (joystick + LEDs), Core de Vídeo, SID, UART |
 | `/ram.bin` | RAM cruda (`?start=&len=`) |
+
+### `POST /run`: compilar y probar en una sola llamada
+
+Es la vía corta para un agente que acaba de compilar un binario y quiere verlo
+funcionando sin abrir PuTTY ni esperar a mano entre `LOAD` y `R`.
+
+```bash
+curl --data-binary @JUEGO.BIN "http://localhost:8080/run?name=JUEGO.BIN&addr=0800"
+sleep 2
+curl -s http://localhost:8080/screen.png -o pantalla.png
+```
+
+Hace, en orden: escribe el binario en la SD y remonta, **reinicia la CPU**,
+vacía la FIFO del UART, manda `LOAD <nombre> <addr>` y, 800 ms después, `R`.
+Responde en milisegundos (no espera al monitor); el resultado se mira en
+`/console.txt` o `/screen.png` entre 1 y 2 s después.
+
+| Parámetro | Por defecto | Nota |
+|---|---|---|
+| `name` | — | nombre 8.3 en la SD. Sin cuerpo POST, ejecuta uno que ya esté |
+| `addr` | `0800` | hexa 4 dígitos, `0000`-`3FFF` |
+
+Sin cuerpo POST también funciona, para relanzar lo que ya está en la tarjeta:
+
+```bash
+curl "http://localhost:8080/run?name=TETRIS.BIN"
+```
+
+> **Reinicia siempre.** Es lo que permite ejecutar programas uno detrás de
+> otro: si hay un juego en marcha, nadie lee el UART y el `LOAD` quedaría en la
+> FIFO. Es el mismo efecto que el botón `RESET` de la ventana.
+>
+> **La dirección importa**: `0800` para los juegos, `2700` para el SID player.
+> Cargar en la dirección equivocada no da error; el programa ejecuta basura.
 
 ### `/state.txt`: distinguir "calcula" de "colgado"
 
@@ -219,6 +254,9 @@ curl http://localhost:8080/state.txt | head -40
 # Inyectar un binario sin reiniciar el emulador (remonta solo):
 curl --data-binary @JUEGO.BIN "http://localhost:8080/sdcard/write?name=JUEGO.BIN"
 curl "http://localhost:8080/sdcard/ls"
+
+# Compilar y probar en un paso (reinicia, carga y ejecuta):
+curl --data-binary @JUEGO.BIN "http://localhost:8080/run?name=JUEGO.BIN&addr=0800"
 curl "http://localhost:8080/sdcard/rename?name=JUEGO.BIN&to=JUEGO2.BIN"
 curl "http://localhost:8080/sdcard/delete?name=JUEGO2.BIN"
 

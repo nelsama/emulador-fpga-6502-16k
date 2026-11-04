@@ -211,8 +211,8 @@ int main(int argc, char** argv) {
   //
   // También se acepta el nombre anterior --debug-http[=PUERTO].
   DebugServer debug;
-  if (argc >= 4) debug.set_sdcard(&sd);  // /sdcard/* para inyectar archivos
-  debug.set_cpu(&cpu);  // PC y registros en /state.txt
+  if (argc >= 4) debug.set_sdcard(&sd);  // /sdcard/* y /run con cuerpo POST
+  debug.set_cpu(&cpu);  // PC y registros en /state.txt, y /run
   {
     int dbg_port = 0; // desactivado por defecto
     if (const char* env = std::getenv("EMU_DEBUG_PORT")) dbg_port = atoi(env);
@@ -704,6 +704,18 @@ int main(int argc, char** argv) {
       if (clock::now() >= esperado) {
         for (char c : comando_diferido) uart.enqueue_rx((uint8_t)(unsigned char)c);
         comando_diferido.clear();
+      }
+    }
+
+    // Comandos que programó POST /run (`LOAD` y después `R`): el servidor HTTP
+    // no puede esperar entre ellos dentro de una petición, así que deja la cola
+    // y se inyecta aquí al vencer cada plazo. Los instantes vienen en la base de
+    // GetTickCount (now_ms del servidor), no en la de `t0`.
+    if (debug.hay_comandos_pendientes()) {
+      std::string cmd;
+      const long long ahora_ms = DebugServer::ms_ahora();
+      while (debug.tomar_comando_vencido(ahora_ms, &cmd)) {
+        for (char c : cmd) uart.enqueue_rx((uint8_t)(unsigned char)c);
       }
     }
 
