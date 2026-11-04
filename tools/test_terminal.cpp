@@ -120,6 +120,20 @@ int main(int argc, char** argv) {
     comprobar_bool("scroll: historial conserva L0",
                    t.historial().front()[0].ch == 'L' &&
                        t.historial().front()[1].ch == '0');
+
+    // `celda_flujo` es lo que usa el panel para pintar una ventana desplazada:
+    // la línea 0 es la primera del historial y `historial().size()` es la fila
+    // 0 de la rejilla visible.
+    comprobar_bool("scroll: lineas_totales = historial + 24",
+                   t.lineas_totales() == t.historial().size() +
+                                             (size_t)TerminalState::ROWS);
+    comprobar_bool("scroll: celda_flujo(0,0) es la primera del historial",
+                   t.celda_flujo(0, 0).ch == 'L' &&
+                       t.celda_flujo(0, 1).ch == '0');
+    comprobar_bool("scroll: celda_flujo(h,0) coincide con la rejilla",
+                   t.celda_flujo(t.historial().size(), 0).ch == t.celda(0, 0).ch);
+    comprobar_bool("scroll: celda_flujo fuera de rango da espacio",
+                   t.celda_flujo(t.lineas_totales(), 0).ch == 0x20);
   }
 
   // 7. CP437: los bytes altos se guardan tal cual (el dibujo los pinta).

@@ -547,6 +547,24 @@ void EmuWindow::clic_en(int x, int y) {
 //
 // Ahora se compone la imagen en un búfer de 640x384 (memoria) y se sube a una
 // textura de una vez: trabajo proporcional a los píxeles, no a las llamadas.
+// Mueve la vista del terminal `lineas` hacia atrás (positivo) o hacia delante
+// (negativo) dentro del historial. 0 = el fondo.
+//
+// El máximo es el historial disponible: no se puede retroceder más allá de la
+// primera línea guardada. Escribir en el terminal NO baja el scroll solo: si
+// estabas mirando el historial, te quedas ahí (como en un terminal de verdad);
+// para volver al fondo se desplaza hasta abajo.
+void EmuWindow::desplazar_terminal(int lineas) {
+  const size_t hist = term_.historial().size();
+  int nuevo = term_scroll_ + lineas;
+  if (nuevo < 0) nuevo = 0;
+  if ((size_t)nuevo > hist) nuevo = (int)hist;
+  if (nuevo != term_scroll_) {
+    term_scroll_ = nuevo;
+    term_sucio_ = true;
+  }
+}
+
 void EmuWindow::dibujar_terminal(void* renderer, const void* caja) {
 #ifdef HAVE_SDL2
   SDL_Renderer* ren = static_cast<SDL_Renderer*>(renderer);
@@ -563,15 +581,35 @@ void EmuWindow::dibujar_terminal(void* renderer, const void* caja) {
     term_sucio_ = true;
   }
 
-  // Solo se recompone si el terminal ha cambiado desde el último fotograma.
-  if (term_.sucio() || term_sucio_) {
+  // Solo se recompone si el terminal ha cambiado desde el último fotograma
+  // (o si cambió el desplazamiento del scroll).
+  if (term_.sucio() || term_sucio_ || term_scroll_ != term_scroll_pintado_) {
     term_.limpiar_sucio();
     term_sucio_ = false;
+    term_scroll_pintado_ = term_scroll_;
     term_px_.assign((size_t)ancho * alto, 0x000000);
 
+    // Ventana visible sobre el flujo (historial + rejilla). Con scroll 0 se
+    // muestra la rejilla tal cual; con scroll N, N líneas más atrás.
+    const size_t hist = term_.historial().size();
+    const size_t total = term_.lineas_totales();
+    size_t primera = 0;
+    if (total > (size_t)TerminalState::ROWS) {
+      // La primera línea del flujo que debe verse arriba.
+      const size_t max_desplazamiento = total - (size_t)TerminalState::ROWS;
+      const size_t desp = term_scroll_ > (int)max_desplazamiento
+                              ? max_desplazamiento
+                              : (size_t)term_scroll_;
+      primera = hist - (hist < desp ? hist : desp);
+    }
+
     for (int fila = 0; fila < TerminalState::ROWS; fila++) {
+      const size_t linea = primera + (size_t)fila;
+      // Las líneas que caen más allá de la rejilla no existen todavía (con el
+      // scroll a tope quedan al final): se dejan en negro.
+      if (linea >= total) break;
       for (int col = 0; col < TerminalState::COLS; col++) {
-        const TerminalState::Celda& celda = term_.celda(fila, col);
+        const TerminalState::Celda& celda = term_.celda_flujo(linea, col);
         // Color efectivo: el inverso intercambia tinta y fondo.
         int fg = celda.at.fg & 15;
         int bg = celda.at.bg & 15;
@@ -624,7 +662,9 @@ void EmuWindow::dibujar_terminal(void* renderer, const void* caja) {
   // El origen es el MISMO que el del texto (`TERM_PAD`, no `TERM_PAD / 2`): el
   // terminal se recorta por ese margen antes de escalarlo y la rejilla empieza
   // ahi.
-  if (term_.cursor_visible()) {
+  // El cursor solo se pinta cuando la vista está en el fondo (scroll 0):
+  // mirando el historial no hay cursor, igual que en cualquier terminal.
+  if (term_.cursor_visible() && term_scroll_ == 0) {
     // Caja de tinta de la fuente 8x16: de la fila 3 a la 10 (ambas incluidas).
     constexpr int kTintaArriba = 3;
     constexpr int kTintaAbajo = 10;
@@ -1163,12 +1203,35 @@ void EmuWindow::present(const uint32_t* rgb, uint8_t leds) {
       const int term_h = TerminalState::ROWS * TERM_CH + 2 * TERM_PAD;  // 80x24 fijo
       const int term_y = y_consola;
       SDL_Rect term{term_x, term_y, term_w, term_h};
+      // Se guarda para que la rueda del ratón sepa si está sobre la consola.
+      term_x_ = term_x;
+      term_y_ = term_y;
+      term_w_ = term_w;
+      term_h_ = term_h;
+      term_caja_valida_ = true;
       SDL_SetRenderDrawColor(ren, 8, 10, 12, 255);
       SDL_RenderFillRect(ren, &term);
       SDL_SetRenderDrawColor(ren, 30, 48, 38, 255);
       SDL_RenderDrawRect(ren, &term);
 
       dibujar_terminal(ren, &term);
+
+      // Indicador de scroll: si la vista está en el historial hay que decirlo,
+      // porque lo que se ve ya no es lo que está escribiendo el programa. Se
+      // dibuja arriba a la IZQUIERDA para no chocar con los selectores.
+      if (term_scroll_ > 0) {
+        char ind[32];
+        std::snprintf(ind, sizeof ind, "^ %d", term_scroll_);
+        const int ancho_ind = (int)std::strlen(ind) * TERM_CW + 8;
+        SDL_Rect h{term.x + 4, term.y + 1, ancho_ind, 13};
+        SDL_SetRenderDrawColor(ren, 70, 58, 30, 255);
+        SDL_RenderFillRect(ren, &h);
+        SDL_SetRenderDrawColor(ren, 210, 180, 90, 255);
+        SDL_RenderDrawRect(ren, &h);
+        for (size_t i = 0; i < std::strlen(ind); i++) {
+          draw_glyph(ren, h.x + 4 + (int)i * TERM_CW, h.y + 2, ind[i], TERM_SCALE);
+        }
+      }
 
       // Selector de codificacion, en la cabecera del modulo (fuera de la
       // rejilla: el terminal se repinta entero y taparia cualquier cosa que se
@@ -1254,6 +1317,23 @@ bool EmuWindow::poll() {
           // Botón derecho: vuelve a la vista normal desde cualquier modo.
           set_vista(Vista::Normal);
         }
+        break;
+      }
+
+      // --- Rueda del ratón: scroll del terminal ---
+      // Solo actúa si el cursor está sobre la consola; en el resto de la
+      // ventana no hace nada (no hay nada más que desplazar).
+      case SDL_MOUSEWHEEL: {
+        if (!term_caja_valida_) break;
+        int mx = 0, my = 0;
+        SDL_GetMouseState(&mx, &my);
+        if (mx < term_x_ || mx >= term_x_ + term_w_ || my < term_y_ ||
+            my >= term_y_ + term_h_)
+          break;
+        // Rueda arriba (y > 0) = hacia el historial. `direction` puede ser
+        // reversed según el sistema; se respeta, que es lo que espera el usuario.
+        const int pasos = ev.wheel.y * (ev.wheel.direction == SDL_MOUSEWHEEL_FLIPPED ? -1 : 1);
+        if (pasos != 0) desplazar_terminal(pasos * 3);  // 3 líneas por muesca
         break;
       }
 
@@ -1348,6 +1428,22 @@ bool EmuWindow::poll() {
           // conserva su tamaño y es el vídeo el que se amplía.
           case SDLK_F11:
             if (down) siguiente_vista();
+            break;
+          // Scroll del terminal. RePág/AvPág se mueven una pantalla y
+          // Inicio/Fin van al principio del historial o al fondo. Funcionan en
+          // los dos modos de teclado: no compiten con nada (en modo UART esas
+          // teclas no se envían al monitor, que tampoco las usa).
+          case SDLK_PAGEUP:
+            if (down) desplazar_terminal(TerminalState::ROWS - 1);
+            break;
+          case SDLK_PAGEDOWN:
+            if (down) desplazar_terminal(-(TerminalState::ROWS - 1));
+            break;
+          case SDLK_HOME:
+            if (down) desplazar_terminal((int)term_.historial().size());
+            break;
+          case SDLK_END:
+            if (down) desplazar_terminal(-(int)term_.lineas_totales());
             break;
           // Esc: vuelve a la vista normal desde los modos de solo vídeo.
           // (No se usa para el juego: los juegos leen el joystick, no el

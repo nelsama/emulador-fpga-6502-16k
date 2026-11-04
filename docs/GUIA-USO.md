@@ -1465,8 +1465,29 @@ decodificación es solo para el panel de la ventana y `/console.png`.
 
 - La rejilla es **fija de 80x24**, lo que asumen los programas del sistema.
 - Lo que sale por arriba se guarda en un **historial** (`TerminalState::historial()`),
-  hasta 1000 líneas. La ventana muestra el número de líneas guardadas.
+  hasta 1000 líneas.
 - La ventana crece en alto lo necesario para que quepan las 24 filas.
+
+**Desplazarse por el historial:**
+
+| Acción | Cómo |
+|---|---|
+| Subir / bajar | **Rueda del ratón** sobre la consola (3 líneas por muesca) |
+| Una pantalla | **RePág** / **AvPág** |
+| Al principio del historial | **Inicio** |
+| Volver al fondo | **Fin** |
+
+- La rueda solo actúa si el cursor está **encima de la consola**.
+- Mientras estás desplazado aparece un **`^ N`** arriba a la izquierda de la
+  consola con las líneas que llevas retrocedidas, y **el cursor de texto no se
+  pinta** (mirando el historial no hay cursor, como en cualquier terminal).
+- Escribir no te devuelve al fondo: te quedas donde estés, así no pierdes lo que
+  estabas leyendo. Pulsa **Fin** para volver a lo que llega en vivo.
+
+> Las teclas de scroll funcionan en los **dos modos** de teclado (`UART` y `JOY`):
+> no compiten con nada, porque el monitor no las usa.
+> El historial **no** cambia lo que sirve `/console.txt`, que sigue siendo la
+> rejilla de 80x24 en vivo.
 
 ##### Entrada de teclado
 

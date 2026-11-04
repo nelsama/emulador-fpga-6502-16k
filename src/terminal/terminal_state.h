@@ -73,6 +73,25 @@ public:
   const std::deque<std::vector<Celda>>& historial() const { return historial_; }
   static constexpr size_t HISTORIAL_MAX = 1000;
 
+  // Celda de cualquier línea del flujo del terminal, contando el historial.
+  //
+  // `linea` 0 es la PRIMERA del historial y `historial().size()` es la fila 0
+  // de la rejilla visible. Así el panel puede pintar una ventana de 24 filas
+  // desplazada hacia atrás sin saber cómo se guarda el historial.
+  // Devuelve una celda vacía si la línea está fuera de rango.
+  const Celda& celda_flujo(size_t linea, int col) const {
+    static const Celda vacia{};
+    if (col < 0 || col >= COLS) return vacia;
+    const size_t hist = historial_.size();
+    if (linea < hist) return historial_[linea][(size_t)col];
+    const size_t fila = linea - hist;
+    if (fila >= (size_t)ROWS) return vacia;
+    return rejilla_[fila * COLS + (size_t)col];
+  }
+
+  // Número total de líneas disponibles (historial + rejilla visible).
+  size_t lineas_totales() const { return historial_.size() + (size_t)ROWS; }
+
   // Texto plano de la pantalla (80x24), útil para /console.txt y los tests.
   // Rejilla como texto, SIEMPRE en CP437: un byte por celda, sin convertir.
   // Es el formato que exporta /console.txt, independiente del modo que tenga

@@ -189,6 +189,22 @@ private:
   std::vector<uint32_t> term_px_;  // buffer 640x384 de la consola
   bool term_sucio_ = true;         // hay que regenerar term_px_
 
+  // Scroll del terminal: líneas que se ha subido hacia el historial.
+  //   0 = vista en el fondo (lo que escribe el programa).
+  //   N = N líneas más atrás; el máximo lo limita el historial disponible.
+  // Se recorta al pintar, así que un valor grande simplemente se queda arriba.
+  int term_scroll_ = 0;
+  // Desplazamiento con el que se compuso term_px_ la última vez: si cambia hay
+  // que rehacer la textura aunque el terminal no haya escrito nada.
+  int term_scroll_pintado_ = 0;
+  // Caja del terminal en coordenadas de ventana (la rellena present()). La
+  // necesita la rueda del ratón para saber si el cursor está encima.
+  int term_x_ = 0, term_y_ = 0, term_w_ = 0, term_h_ = 0;
+  bool term_caja_valida_ = false;
+
+  // Cambia el scroll del terminal, recortando al rango disponible.
+  void desplazar_terminal(int lineas);
+
   // Cache del panel de estado (placa + LEDs + puerto 1) en una textura: solo
   // se redibuja cuando cambian los LEDs, los pines o los colores con que se
   // pinta según el modo de cada bit.
