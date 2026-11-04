@@ -170,6 +170,15 @@ constexpr int kEntradaBytes = 32;
 constexpr int kTablaOffset = 16;
 
 // Normaliza a 8.3 en mayúsculas, como el monitor. Devuelve "" si no vale.
+//
+// El nombre se RECORTA a 8 caracteres de base y 3 de extensión si viene más
+// largo: al añadir un archivo desde la ventana (o con sd_tool.py) es habitual
+// soltar un .bin con nombre de Windows largo, y rechazarlo era perder el
+// archivo por un detalle cosmético. Recortar es lo que hace el propio monitor y
+// lo que espera quien usa una MicroFS de 8.3.
+//
+// Solo se rechazan los nombres que no tienen arreglo: vacíos o con caracteres
+// que no caben en 8.3 (separadores de ruta, controles).
 std::string normalizar_nombre(const std::string& in) {
   std::string base = in, ext;
   const size_t punto = in.find_last_of('.');
@@ -177,7 +186,9 @@ std::string normalizar_nombre(const std::string& in) {
     base = in.substr(0, punto);
     ext = in.substr(punto + 1);
   }
-  if (base.empty() || base.size() > 8 || ext.size() > 3) return "";
+  if (base.empty()) return "";
+  if (base.size() > 8) base.resize(8);
+  if (ext.size() > 3) ext.resize(3);
   std::string out;
   for (char c : base) {
     if (!(c >= ' ' && c < 127) || c == '.' || c == '\\' || c == '/') return "";

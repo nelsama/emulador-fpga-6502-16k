@@ -354,9 +354,18 @@ int main(int argc, char** argv) {
       const size_t barra = nombre.find_last_of("\\/");
       if (barra != std::string::npos) nombre = nombre.substr(barra + 1);
       if (sd.agregar_archivo(nombre, datos, &err)) {
-        std::printf("SD: %s anadido (%zu bytes)\n", nombre.c_str(), datos.size());
         std::vector<EmuWindow::ArchivoSd> lista;
         for (const auto& e : sd.listar_archivos()) lista.push_back({e.nombre, e.bytes});
+        // El nombre en la tarjeta es 8.3: si el de Windows no cabía, se ha
+        // recortado. Se avisa con el nombre REAL para que la lista no sorprenda.
+        std::printf("SD: %s anadido (%zu bytes)\n", nombre.c_str(), datos.size());
+        for (const auto& e : lista) {
+          if (e.bytes == (uint32_t)datos.size() && e.nombre != nombre) {
+            std::printf("SD: nombre recortado a 8.3: %s -> %s\n", nombre.c_str(),
+                        e.nombre.c_str());
+            break;
+          }
+        }
         window.set_listado_sd(std::move(lista));
         remontar();
       } else {

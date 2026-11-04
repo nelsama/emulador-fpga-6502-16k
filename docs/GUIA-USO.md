@@ -664,8 +664,14 @@ python tools/sd_tool.py delete  tarjeta.img JUEGO.BIN
 python tools/sd_tool.py format  tarjeta.img
 ```
 
-**Nombres:** máximo 11 caracteres reales (la tabla de 12 incluye el `\0`), y el
-monitor los muestra en mayúsculas.
+**Nombres:** el espacio real es **8.3** (8 caracteres de base + 3 de extensión);
+la tabla guarda 12 bytes contando el `\0`, y el monitor los muestra en
+mayúsculas.
+
+> **Los nombres largos se recortan, no se rechazan.** Al añadir un archivo desde
+> la ventana (`+ Añadir`) o con `sd_tool.py`, un nombre de Windows como
+> `river_raid_deluxe.bin` entra como `RIVER_RA.BIN`. Lo que sí se rechaza es un
+> nombre vacío o con caracteres que no caben en 8.3 (`/`, `\\`).
 
 **Otras herramientas:**
 
