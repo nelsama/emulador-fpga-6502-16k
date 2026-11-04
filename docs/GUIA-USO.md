@@ -1478,9 +1478,13 @@ decodificación es solo para el panel de la ventana y `/console.png`.
 | Volver al fondo | **Fin** |
 
 - La rueda solo actúa si el cursor está **encima de la consola**.
-- Mientras estás desplazado aparece un **`^ N`** arriba a la izquierda de la
-  consola con las líneas que llevas retrocedidas, y **el cursor de texto no se
-  pinta** (mirando el historial no hay cursor, como en cualquier terminal).
+- Mientras estás desplazado aparece un **`HIST N`** en ámbar en la cabecera de
+  la consola, con las líneas que llevas retrocedidas, y **el cursor de texto no
+  se pinta** (mirando el historial no hay cursor, como en cualquier terminal).
+- **No hay historial hasta que la consola se llena:** las 24 primeras líneas
+  caben en pantalla y no se guardan. Si la consola aún no ha soltado líneas por
+  arriba, la rueda no se mueve (y el emulador lo avisa por su consola de
+  diagnóstico).
 - Escribir no te devuelve al fondo: te quedas donde estés, así no pierdes lo que
   estabas leyendo. Pulsa **Fin** para volver a lo que llega en vivo.
 

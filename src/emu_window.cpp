@@ -559,10 +559,21 @@ void EmuWindow::desplazar_terminal(int lineas) {
   int nuevo = term_scroll_ + lineas;
   if (nuevo < 0) nuevo = 0;
   if ((size_t)nuevo > hist) nuevo = (int)hist;
-  if (nuevo != term_scroll_) {
-    term_scroll_ = nuevo;
-    term_sucio_ = true;
+  if (nuevo == term_scroll_) {
+    // Sin historial no hay nada que mostrar: se avisa una sola vez para que no
+    // parezca que el scroll está roto (la consola solo guarda líneas cuando se
+    // llena, así que en una sesión corta el historial está vacío).
+    if (hist == 0 && lineas > 0 && !aviso_scroll_dado_) {
+      aviso_scroll_dado_ = true;
+      std::printf(
+          "Terminal: no hay historial que desplazar (la consola aún no se ha "
+          "llenado)\n");
+      std::fflush(stdout);
+    }
+    return;
   }
+  term_scroll_ = nuevo;
+  term_sucio_ = true;
 }
 
 void EmuWindow::dibujar_terminal(void* renderer, const void* caja) {
@@ -1215,24 +1226,6 @@ void EmuWindow::present(const uint32_t* rgb, uint8_t leds) {
       SDL_RenderDrawRect(ren, &term);
 
       dibujar_terminal(ren, &term);
-
-      // Indicador de scroll: si la vista está en el historial hay que decirlo,
-      // porque lo que se ve ya no es lo que está escribiendo el programa. Se
-      // dibuja arriba a la IZQUIERDA para no chocar con los selectores.
-      if (term_scroll_ > 0) {
-        char ind[32];
-        std::snprintf(ind, sizeof ind, "^ %d", term_scroll_);
-        const int ancho_ind = (int)std::strlen(ind) * TERM_CW + 8;
-        SDL_Rect h{term.x + 4, term.y + 1, ancho_ind, 13};
-        SDL_SetRenderDrawColor(ren, 70, 58, 30, 255);
-        SDL_RenderFillRect(ren, &h);
-        SDL_SetRenderDrawColor(ren, 210, 180, 90, 255);
-        SDL_RenderDrawRect(ren, &h);
-        for (size_t i = 0; i < std::strlen(ind); i++) {
-          draw_glyph(ren, h.x + 4 + (int)i * TERM_CW, h.y + 2, ind[i], TERM_SCALE);
-        }
-      }
-
       // Selector de codificacion, en la cabecera del modulo (fuera de la
       // rejilla: el terminal se repinta entero y taparia cualquier cosa que se
       // dibuje encima).
@@ -1274,6 +1267,30 @@ void EmuWindow::present(const uint32_t* rgb, uint8_t leds) {
           draw_glyph(ren, tk.x + 5 + i * TERM_CW, tk.y + 2, etq_tec[i], TERM_SCALE);
         }
         zonas_.push_back(Zona{tk.x, tk.y, tk.w, tk.h, "teclado_destino", ""});
+
+        // Indicador de scroll: si la vista está en el historial hay que decirlo,
+        // porque lo que se ve ya no es lo que está escribiendo el programa.
+        //
+        // Va en la CABECERA del terminal (que se repinta aparte), no dentro de
+        // la rejilla: la rejilla la reescribe dibujar_terminal() en cada
+        // desplazamiento y cualquier cosa pintada encima desaparece. Tampoco
+        // puede ir al fondo del terminal, porque el panel suele ser más alto
+        // que la ventana y esa parte queda fuera.
+        if (term_scroll_ > 0) {
+          // "HIST n" en vez de "^n": el glifo `^` de la fuente tiene 3x4 px de
+          // tinta y a esta escala no se distingue; el texto se lee siempre.
+          char ind[24];
+          std::snprintf(ind, sizeof ind, "HIST %d", term_scroll_);
+          const int ancho_ind = (int)std::strlen(ind) * TERM_CW + 8;
+          SDL_Rect h{tk.x - ancho_ind - 4, term.y + 1, ancho_ind, 13};
+          SDL_SetRenderDrawColor(ren, 70, 58, 30, 255);
+          SDL_RenderFillRect(ren, &h);
+          SDL_SetRenderDrawColor(ren, 210, 180, 90, 255);
+          SDL_RenderDrawRect(ren, &h);
+          for (size_t i = 0; i < std::strlen(ind); i++) {
+            draw_glyph(ren, h.x + 4 + (int)i * TERM_CW, h.y + 2, ind[i], TERM_SCALE);
+          }
+        }
       }
     }
   }

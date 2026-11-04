@@ -204,6 +204,7 @@ private:
 
   // Cambia el scroll del terminal, recortando al rango disponible.
   void desplazar_terminal(int lineas);
+  bool aviso_scroll_dado_ = false;  // ya se avisó de que no hay historial
 
   // Cache del panel de estado (placa + LEDs + puerto 1) en una textura: solo
   // se redibuja cuando cambian los LEDs, los pines o los colores con que se
