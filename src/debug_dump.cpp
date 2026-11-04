@@ -388,7 +388,7 @@ bool dump_state_txt_mem(Bus& bus, const Cpu6502* cpu, std::string& out) {
     for (int s = 0; s < 32; s++)
       if (oam[s * 5 + 1] < 248) sprites++;
 
-    out += "VIDEO ($D800-$D817):\n";
+    out += "VIDEO ($D800-$D818):\n";
     appendf(out, "  tiles escritos: %d de %d celdas\n", tiles_no_vacios, Video::MAP_W * Video::MAP_H);
     appendf(out, "  sprites activos: %d de 32\n", sprites);
 

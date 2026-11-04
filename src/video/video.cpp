@@ -9,14 +9,63 @@
 // Carga la fuente C64 en los patrones 1bpp -> 2bpp (tiles $20..$7F).
 // En el FPGA lo hace la fase de setup del video_core; aquí se hace al construir
 // la clase, porque el software espera encontrarla ya puesta.
+//
+// El color del trazo lo elige $D818 (`font_color_`: 0 = invisible, 1, 2 y 3 por
+// defecto). El RTL lo resuelve con MASK_LO/MASK_HI, así que un solo bit de la
+// fuente alimenta uno u otro plano:
+//   plano0 = byte AND MASK_LO[color]      plano1 = byte AND MASK_HI[color]
+//     color 0 -> 00/00 (invisible)   color 1 -> FF/00
+//     color 2 -> 00/FF               color 3 -> FF/FF
 void Video::load_default_font() {
+  static const uint8_t kMaskLo[4] = {0x00, 0xFF, 0x00, 0xFF};
+  static const uint8_t kMaskHi[4] = {0x00, 0x00, 0xFF, 0xFF};
+  const uint8_t mask_lo = kMaskLo[font_color_ & 0x03];
+  const uint8_t mask_hi = kMaskHi[font_color_ & 0x03];
+
   for (int ch = 0; ch < 96; ch++) {
     const int tile = 0x20 + ch;
     for (int row = 0; row < 8; row++) {
       const uint8_t bits = kFontC64[ch * 8 + row];
-      // 1bpp -> 2bpp: un pixel encendido usa el color 3 (blanco), el resto 0.
-      fgpat_[tile * 16 + row * 2] = bits;     // plano 0
-      fgpat_[tile * 16 + row * 2 + 1] = bits; // plano 1 (color 3)
+      fgpat_[tile * 16 + row * 2] = bits & mask_lo;      // plano 0
+      fgpat_[tile * 16 + row * 2 + 1] = bits & mask_hi;  // plano 1
+    }
+  }
+}
+
+// Patrones de FONDO 0..7 que graba la secuencia de inicializacion (fase 2 de
+// video_core.vhd). Son 8 tiles graficos de demo: tierra, cesped, copa de arbol,
+// tronco, nube, dos piedras y un matojo. Copiados del RTL tal cual.
+//
+// Tras un setup ($D816) la fase 2 escribe CEROS en esos mismos tiles, asi que el
+// arte de demo solo existe hasta el primer setup.
+namespace {
+const uint8_t kDemoTilesP0[8][8] = {
+    {0xFF, 0xFF, 0xFF, 0xF7, 0xFF, 0xEF, 0xDF, 0xFF},  // 0 tierra
+    {0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF},  // 1 cesped
+    {0x3C, 0x7E, 0xFF, 0xFF, 0xFF, 0xFF, 0x7E, 0x3C},  // 2 copa de arbol
+    {0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18},  // 3 tronco
+    {0x00, 0x38, 0x7C, 0xFE, 0xFF, 0xFF, 0xFE, 0x7C},  // 4 nube
+    {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF},  // 5 piedra
+    {0x00, 0x18, 0x3C, 0x7E, 0x7E, 0x3C, 0x18, 0x00},  // 6 piedra 2
+    {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},  // 7 matojo
+};
+const uint8_t kDemoTilesP1[8][8] = {
+    {0x00, 0x10, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00},  // 0 tierra
+    {0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},  // 1 cesped
+    {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},  // 2 copa de arbol
+    {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},  // 3 tronco
+    {0x00, 0x38, 0x7C, 0xFE, 0xFF, 0xFF, 0xFE, 0x7C},  // 4 nube
+    {0x00, 0x18, 0x3C, 0x7E, 0x7E, 0x3C, 0x18, 0x00},  // 5 piedra
+    {0x00, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x00},  // 6 piedra 2
+    {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF},  // 7 matojo
+};
+}  // namespace
+
+void Video::load_demo_bg_tiles() {
+  for (int tile = 0; tile < 8; tile++) {
+    for (int row = 0; row < 8; row++) {
+      fgpat_[tile * 16 + row * 2] = kDemoTilesP0[tile][row];
+      fgpat_[tile * 16 + row * 2 + 1] = kDemoTilesP1[tile][row];
     }
   }
 }
@@ -83,12 +132,15 @@ Video::Video() {
   // Al arrancar, el FPGA carga la fuente C64 en los patrones ASCII. Sin esto
   // los juegos que escriben texto no muestran nada.
   load_default_font();
+  // Los tiles de fondo 0..7 traen arte de demo (fase 2 del init). Se borran con
+  // el primer setup, igual que los patrones de sprite 0..2.
+  load_demo_bg_tiles();
   // Y las formas de demo en los patrones de sprite 0..2 (fase 3 del init).
   load_demo_sprite_patterns();
 }
 
 bool Video::decodes(uint16_t addr) const {
-  return addr >= 0xD800 && addr <= 0xD817;
+  return addr >= 0xD800 && addr <= 0xD818;
 }
 
 uint8_t Video::read(uint16_t addr, bool& resp) {
@@ -155,6 +207,15 @@ void Video::write(uint16_t addr, uint8_t data, bool& resp) {
       setup_pendiente_ = true;
       break;
     }
+    case 0xD818:
+      // COLOR DE LA FUENTE (video_bus.vhd): solo los 2 bits bajos.
+      //   Escribirlo NO repinta: los patrones de la fuente ya estan expandidos
+      //   en VRAM. Hay que disparar SETUP ($D816) para que se re-expanda con el
+      //   color nuevo (fase 4 del init).
+      //   El valor de arranque es 3 (blanco), asi que el software antiguo no
+      //   nota el cambio.
+      font_color_ = data & 0x03;
+      break;
     default: resp = false; break;
   }
 }

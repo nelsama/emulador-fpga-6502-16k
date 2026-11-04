@@ -15,7 +15,7 @@
 //   $8000-$BFFF  ROM 16 KB
 //   $C000-$C0FF  GPIO + I2C + UART + Timer + SPI
 //   $D400-$D41F  SID 6581
-//   $D800-$D817  Vídeo
+//   $D800-$D818  Vídeo
 //   $FFFA-$FFFF  Vectores -> redirigidos a ROM $3FFA-$3FFF
 class Bus {
 public:

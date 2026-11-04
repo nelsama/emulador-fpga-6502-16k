@@ -66,12 +66,14 @@ public:
   const std::array<uint8_t, 2048>& tilemap()   const { return tilemap_; }
   const std::array<uint8_t, 2048>& attrib()    const { return attrib_; }
   const std::array<uint8_t, 160>&   oam()      const { return oam_; }
-  // Patrones y paleta: solo para verificar el estado inicial frente al RTL
+  // Solo para verificar el estado inicial frente al RTL
   // (pruebas y depuracion).
   const std::array<uint8_t, 256 * 8 * 2>& bg_patterns()    const { return fgpat_; }
   const std::array<uint8_t, 64 * 8 * 2>&  sprite_patterns() const { return sppat_; }
   const std::array<uint16_t, 32>&         palette()        const { return pal_; }
   uint8_t palette_ptr() const { return pal_ptr_; }
+  // Color del trazo de la fuente ($D818): 0 = invisible, 1, 2, 3 = blanco.
+  uint8_t font_color() const { return font_color_; }
 
   // Registros de scroll y bandas ($D804-$D812). Los necesita el depurador para
   // averiguar qué celda calcula el barrido de colisión: sin ellos no se puede
@@ -114,6 +116,10 @@ private:
   uint8_t pal_ptr_ = 0;      // $D813
   uint8_t pal_buf_lo_ = 0;   // $D814 (buffer)
   uint8_t setup_busy_ = 0;   // $D817 bit0 (estado setup)
+  // COLOR DE LA FUENTE ($D818): entrada de paleta del trazo al expandir la
+  // fuente (0 = invisible, 1, 2, 3 = blanco por defecto). Es estable, como el
+  // scroll, y se aplica al re-expandir (SETUP), no al escribirlo.
+  uint8_t font_color_ = 3;
   // Setup pedido por $D816 pero aun no aplicado: el core lo ejecuta mientras
   // dura el BUSY, y hasta terminarlo ignora las escrituras del CPU.
   bool    setup_pendiente_ = false;
@@ -157,6 +163,8 @@ private:
   // Funciones de color sobre una paleta dada (no sobre pal_).
   uint32_t rgb444_to_rgba(uint16_t rgb444) const;
   void load_default_font();
+  // Tiles de fondo 0..7: los escribe la fase 2 del init del core (arte de demo).
+  void load_demo_bg_tiles();
   // Patrones de sprite 0..2: los escribe la fase 3 del init del core.
   void load_sprite_pattern(int patron, const uint8_t* p0, const uint8_t* p1);
   void load_demo_sprite_patterns();

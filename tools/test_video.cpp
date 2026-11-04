@@ -67,6 +67,25 @@ static void test_patrones_demo() {
       if (sp[patron * 16 + i] != 0) libres = false;
   check(libres, "patrones: 3..63 libres al arrancar");
 
+  // Los tiles de FONDO 0..7 también traen arte de demo (fase 2): no arrancan
+  // a cero. Se comprueba que hay tinta y que son 8 distintos.
+  {
+    const auto& bg0 = v.bg_patterns();
+    int con_tinta = 0;
+    for (int t = 0; t < 8; t++) {
+      bool tinta = false;
+      for (int i = 0; i < 16; i++)
+        if (bg0[t * 16 + i] != 0) tinta = true;
+      if (tinta) con_tinta++;
+    }
+    check(con_tinta == 8, "patrones: los 8 tiles de fondo de demo traen arte");
+    // El 8 en adelante no es arte de demo (salvo la fuente, que empieza en $20).
+    bool vacio8 = true;
+    for (int i = 0; i < 16; i++)
+      if (bg0[8 * 16 + i] != 0) vacio8 = false;
+    check(vacio8, "patrones: el tile de fondo 8 arranca a cero");
+  }
+
   // Escribir algo en la VRAM ANTES del setup, para ver que se borra.
   v.write(0xD800, 0x05, resp);  // dir lo
   v.write(0xD801, 0x00, resp);  // area 00 = tilemap
@@ -94,6 +113,20 @@ static void test_patrones_demo() {
   for (int i = 0; i < 16; i++)
     if (bg[0x41 * 16 + i] != 0) fuente = true; // 'A'
   check(fuente, "setup: la fuente se re-expande");
+
+  // Y el setup deja a cero el arte de demo de fondo 0..7, igual que el de
+  // sprite 0..2 (el core recorre las mismas fases escribiendo ceros).
+  bool tiles_cero = true;
+  for (int t = 0; t < 8; t++)
+    for (int i = 0; i < 16; i++)
+      if (bg[t * 16 + i] != 0) tiles_cero = false;
+  check(tiles_cero, "setup: los tiles de fondo 0..7 quedan a cero");
+
+  bool sp_cero = true;
+  for (int patron = 0; patron <= 2; patron++)
+    for (int i = 0; i < 16; i++)
+      if (v.sprite_patterns()[patron * 16 + i] != 0) sp_cero = false;
+  check(sp_cero, "setup: los patrones de sprite 0..2 quedan a cero");
 }
 
 // El barrido mantiene VIDEO_READY y alterna VBLANK.
@@ -359,14 +392,20 @@ static void test_scroll_vertical_ancho() {
   bool resp = false;
 
   // Tilemap con una fila distinta en cada fila de celda, para que un desfase
-  // de fila se note.
-  for (int celda = 0; celda < 2048; celda++) {
-    a.write(0xD800, (uint8_t)(celda & 0xFF), resp);
-    a.write(0xD801, (uint8_t)(0x00 | ((celda >> 8) & 0x07)), resp); // area 00
-    a.write(0xD802, (uint8_t)((celda / Video::MAP_W) & 0xFF), resp);
+  // de fila se note. Se escribe en LOS DOS videos: si solo se pusiera en uno,
+  // la comparación de frames no probaría nada (fallaba por el tilemap, no por
+  // el scroll).
+  for (Video* v : {&a, &b}) {
+    for (int celda = 0; celda < 2048; celda++) {
+      v->write(0xD800, (uint8_t)(celda & 0xFF), resp);
+      v->write(0xD801, (uint8_t)(0x00 | ((celda >> 8) & 0x07)), resp); // area 00
+      v->write(0xD802, (uint8_t)((celda / Video::MAP_W) & 0xFF), resp);
+    }
   }
 
-  // a) scroll_y = 260 ; b) scroll_y = 4 (260 & 0xFF). Deben dar el mismo frame.
+  // a) scroll_y = 260 ; b) scroll_y = 4 (260 & 0xFF). Deben dar el mismo frame:
+  // 260 = 32 tiles x 8 px + 4, y el mapa tiene 32 filas, así que la fila de
+  // celda coincide y el píxel dentro del tile también.
   a.write(0xD806, 260 & 0xFF, resp);
   a.write(0xD807, 260 >> 8, resp);
   b.write(0xD806, 4, resp);
@@ -378,15 +417,15 @@ static void test_scroll_vertical_ancho() {
   b.render(fb.data());
   check(fa == fb, "scroll_y: 260 y 4 dibujan lo mismo");
 
-  // Y con 2047 (máximo del registro): equivale a 2047 & 0xFF = 255.
-  Video c, d;
-  c.write(0xD806, 2047 & 0xFF, resp);
-  c.write(0xD807, 2047 >> 8, resp);
-  d.write(0xD806, 255, resp);
-  d.write(0xD807, 0, resp);
+  // Y con 2047 (máximo del registro): equivale a 2047 & 0xFF = 255, porque
+  // 2047 = 31*64 + 63 y 255 = 31*8 + 7 -> misma fila (31) y mismo píxel (7).
+  a.write(0xD806, 2047 & 0xFF, resp);
+  a.write(0xD807, 2047 >> 8, resp);
+  b.write(0xD806, 255, resp);
+  b.write(0xD807, 0, resp);
   std::vector<uint32_t> fc(n), fd(n);
-  c.render(fc.data());
-  d.render(fd.data());
+  a.render(fc.data());
+  b.render(fd.data());
   check(fc == fd, "scroll_y: 2047 y 255 dibujan lo mismo");
 }
 
@@ -465,6 +504,55 @@ static void test_sprites_line_buffer() {
   check((st8 & 0x40) == 0, "sprites: 8 en una línea no activan OVERFLOW");
 }
 
+// $D818 elige la entrada de paleta del trazo de la fuente. Se aplica al
+// re-expandir (SETUP $D816), no al escribir el registro.
+static void test_font_color() {
+  Video v;
+  bool resp = false;
+  // Se usa "!" ($21): $20 es el espacio y no tiene tinta, así que no probaría nada.
+  const int base = 0x21 * 16;  // "!": glifo con tinta ($20 es el espacio)
+
+  // Por defecto el color es 3 (blanco): ambos planos llevan el glifo.
+  check(v.font_color() == 3, "font_color: arranca en 3 (blanco)");
+  const uint8_t p0_blanco = v.bg_patterns()[base];
+  check(p0_blanco != 0, "font_color: con color 3 el glifo tiene tinta");
+
+  // Color 0 -> invisible: los dos planos a cero tras el setup.
+  v.write(0xD818, 0x00, resp);
+  check(v.font_color() == 0, "font_color: D818 guarda el valor");
+  check(v.bg_patterns()[base] == p0_blanco,
+        "font_color: escribir D818 no repinta (sigue igual)");
+  v.write(0xD816, 0x01, resp); // SETUP: re-expande la fuente
+  for (int i = 0; i < 16; i++) v.tick_frame(); // termina el BUSY
+  check(v.bg_patterns()[base] == 0x00 && v.bg_patterns()[base + 1] == 0x00,
+        "font_color: color 0 deja la fuente invisible");
+
+  // Color 1 -> solo plano 0.
+  v.write(0xD818, 0x01, resp);
+  v.write(0xD816, 0x01, resp);
+  for (int i = 0; i < 16; i++) v.tick_frame();
+  check(v.bg_patterns()[base] != 0x00 && v.bg_patterns()[base + 1] == 0x00,
+        "font_color: color 1 usa solo el plano 0");
+
+  // Color 2 -> solo plano 1.
+  v.write(0xD818, 0x02, resp);
+  v.write(0xD816, 0x01, resp);
+  for (int i = 0; i < 16; i++) v.tick_frame();
+  check(v.bg_patterns()[base] == 0x00 && v.bg_patterns()[base + 1] != 0x00,
+        "font_color: color 2 usa solo el plano 1");
+
+  // Color 3 -> los dos planos (vuelve al blanco).
+  v.write(0xD818, 0x03, resp);
+  v.write(0xD816, 0x01, resp);
+  for (int i = 0; i < 16; i++) v.tick_frame();
+  check(v.bg_patterns()[base] != 0x00 && v.bg_patterns()[base + 1] != 0x00,
+        "font_color: color 3 vuelve a los dos planos");
+
+  // Solo se usan los 2 bits bajos.
+  v.write(0xD818, 0xFF, resp);
+  check(v.font_color() == 3, "font_color: solo cuenta los 2 bits bajos");
+}
+
 int main() {
   std::printf("test_video: Core de Video\n");
   test_paleta_satura();
@@ -476,6 +564,7 @@ int main() {
   test_scroll_vertical_ancho();
   test_barrido();
   test_sprites_line_buffer();
+  test_font_color();
   if (fallos) {
     std::printf("test_video: %d FALLOS\n", fallos);
     return 1;

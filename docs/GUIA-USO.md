@@ -574,7 +574,7 @@ curl -s -o copia.bin "http://localhost:8080/sdcard/read?name=PACMAN.BIN"
 GPIO:
   LEDs   : 3F  [######]  (bit5 = LEFT ... bit0 = RIGHT, 1 = encendido)
   dir1/dir2: 00 / C0 (1 = entrada)
-VIDEO ($D800-$D817):
+VIDEO ($D800-$D818):
   tiles escritos: 812 de 2048 celdas
   sprites activos: 12 de 32
   texto visible (24x40 desde fila 0):
@@ -689,7 +689,7 @@ monitor los muestra en mayúsculas.
 | `$C030-$C03F` | Timer / RTC: contadores con latch, timer programable |
 | `$C040-$C047` | SPI: datos, estado, CS para la SD |
 | `$D400-$D41F` | SID 6581 |
-| `$D800-$D817` | Core de Vídeo: puerto indirecto VRAM, scroll, paletas |
+| `$D800-$D818` | Core de Vídeo: puerto indirecto VRAM, scroll, paletas |
 
 Detalle completo en `../fpga-6502-16k/docs/07-MANUAL-PROGRAMACION.md`.
 
@@ -719,16 +719,19 @@ Detalle completo en `../fpga-6502-16k/docs/07-MANUAL-PROGRAMACION.md`.
 
 El SID player usa `$D41D-$D41F` para mover los 6 LEDs.
 
-**Vídeo (`$D800-$D817`)**
+**Vídeo (`$D800-$D818`)**
 
 | Dir | Uso |
 |---|---|
 | `$D800` | dirección baja de VRAM |
 | `$D801` | `area<<6 \| dir[10:8]` (+ bit 5 = plano 1 en patrones) |
 | `$D802` | dato; **escribirlo dispara** la escritura |
-| `$D803` | STATUS (R): bit7 VBLANK, bit4 VIDEO_READY |
+| `$D803` | STATUS (R): bit7 VBLANK, bit6 OVERFLOW, bit5 SOLID_HIT, bit4 VIDEO_READY |
 | `$D804-$D807` | scroll X/Y (bajo y alto) |
 | `$D813-$D815` | paleta: índice, byte bajo, byte alto (dispara) |
+| `$D816` | SETUP: relanza las fases de init y **re-expande la fuente** |
+| `$D817` | SETUP_ST (R): bit4 VIDEO_READY, bit0 BUSY |
+| `$D818` | color del trazo de la fuente (2 bits): 0 invisible, 1, 2, 3 = blanco |
 
 Áreas de VRAM: `$00` tilemap, `$40` atributos, `$80` patrón fondo plano 0,
 `$A0` patrón fondo plano 1, `$C0` OAM, `$C8` patrón sprite plano 0,
@@ -920,8 +923,8 @@ porque hay zonas que el programa **no** posee:
 
 | Zona | Estado tras el arranque |
 |---|---|
-| Tilemap y atributos (2048 celdas) | a cero |
-| Patrones **fondo** 0–7 | 8 tiles de demo |
+| Tilemap y atributos (2048 celdas) | a cero (tilemap con `$20` en las fases de texto) |
+| Patrones **fondo** 0–7 | **8 tiles de demo** (tierra, césped, copa, tronco, nube, 2 piedras, matojo) |
 | Patrones **fondo** `$20`–`$7F` | **fuente ASCII** (se expande de 1bpp a 2bpp) |
 | Patrones **sprite 0–2** | formas de demo: cara, rombo y X |
 | Patrones **sprite 3–63** | a cero |
@@ -940,7 +943,14 @@ vuelve a expandir la fuente.
 > escrituras del CPU a la VRAM. El emulador reproduce ese bloqueo.
 >
 > Los **tiles de fondo 0–7** tienen el mismo caso: vienen con texturas de demo y
-> se sobrescriben igual.
+> se sobrescriben igual. Son los de la fase 2 del init (tierra, césped, copa de
+> árbol, tronco, nube, dos piedras y matojo).
+>
+> ⚠️ **Un `setup` (`$D816`) borra ese arte:** recorre las mismas fases que el
+> arranque pero escribiendo **ceros**, así que deja a cero los tiles de fondo
+> 0–7 y los patrones de sprite 0–2. Si el juego los usa, **recárgalos después**
+> del setup (el tilemap y los atributos también se limpian). Solo la fuente
+> (`$20–$7F`) se re-expande.
 >
 > **La cara que aparece arriba a la izquierda al arrancar es normal.** El OAM
 > arranca a cero, así que el sprite 0 queda en (0,0) con `Y=0 < 248` (activo) y
@@ -949,6 +959,37 @@ vuelve a expandir la fuente.
 > FPGA). Es una diferencia de visualización, no de emulación: la ventana y
 > `/screen.png` muestran los 320×240 completos, sin recorte. Desaparece en cuanto
 > un programa hace `setup_video()` o escribe el OAM.
+
+#### Color de la fuente (`$D818`)
+
+El trazo de la fuente C64 no está fijado al blanco: `$D818` elige la **entrada
+de paleta** que usa al expandir los glifos ASCII (`$20-$7F`).
+
+| Valor | Trazo |
+|---|---|
+| `0` | invisible (no se pinta nada) |
+| `1` | color 1 de la paleta del fondo |
+| `2` | color 2 |
+| `3` | color 3 — **valor de arranque**, el blanco de siempre |
+
+Solo se usan los **2 bits bajos**. El software antiguo no nota el cambio porque
+arranca en `3`.
+
+> ⚠️ **Escribir `$D818` no repinta nada.** Los glifos ya están expandidos en la
+> VRAM como patrones tile `$20-$7F`; el color se aplica al **re-expandir** la
+> fuente, cosa que ocurre en el **SETUP (`$D816`)**. Es decir:
+>
+> ```asm
+> sta $D818      ; color nuevo
+> sta $D816      ; SETUP: re-expande la fuente (y limpia tilemap/atributos)
+> ```
+>
+> Y ojo: ese SETUP **limpia toda la VRAM** (tilemap, atributos, fondo 0-7 y
+> sprites 0-2). Por eso `$D818` sirve para fijar el color al arrancar el juego,
+> no para cambiarlo en caliente a mitad de partida.
+
+El emulador lo reproduce desde el mismo `cac7049` del core: `Video::font_color_`
+con las máscaras `MASK_LO`/`MASK_HI` del RTL, y `make test` lo cubre.
 
 #### Puntero de paleta: satura en 31
 
@@ -1071,7 +1112,7 @@ celda que consulta cada sprite, así que no hace falta correlacionar `/screen.pn
 con el OAM (peticiones distintas, no atómicas):
 
 ```
-VIDEO ($D800-$D817):
+VIDEO ($D800-$D818):
   scroll: x=0 y=74
   bandas: sin split
   scroll de la colision: x=0 y=74  (ultima banda dibujada)
