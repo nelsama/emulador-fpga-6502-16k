@@ -30,11 +30,15 @@ un tope de 64 KB).
 
 **Qué hacer.**
 
-- Durante el desarrollo, salir con un reset: el botón **`RESET`** del panel
-  (acción `reset_cpu`) o `GET /reset` por HTTP. Vacían la FIFO de entrada para
-  que lo pendiente no llegue al programa siguiente.
+- Durante el desarrollo, salir con un reset: el botón **`RESET`** del panel de la
+  ventana (acción `reset_cpu`). Vacía la FIFO de entrada para que lo pendiente
+  no llegue al programa siguiente.
 - Si el programa es un juego sin teclado, no esperes a que devuelva el control
   al monitor: el reset es la única salida. Por eso el botón existe.
+- **No hay endpoint HTTP para el reset.** Desde un script o un agente no se
+  puede reiniciar la máquina: `/uart?cmd=Q` tampoco sirve si el programa ya no
+  lee el UART (el `Q` se queda en la FIFO). Solo `/uart?cmd=...` funciona
+  mientras el monitor siga al mando.
 
 **Por qué es así.** Es fiel al hardware: la salida del programa no reinicia la
 CPU, y `Q` es un comando que atiende el **monitor**, no el sistema.
@@ -98,14 +102,24 @@ el emulador; el monitor solo conoce el corto).
 
 ---
 
-## 6. No hay que sondear el HTTP mientras corre un juego
+## 6. El sondeo del HTTP y las teclas van al MISMO sitio
 
-**Restricción.** El servidor de depuración es un proceso más y cada petición
-tiene coste; el índice `/` se refresca solo y genera tráfico continuo.
+**Restricción.** Todo lo que entra por el UART —el teclado de la ventana, PuTTY,
+`/uart?cmd=`, el socket 4000 y el sondeo del HTTP— acaba en la **misma FIFO de
+recepción**. El programa no puede distinguir de dónde vino.
 
-**Qué se ve.** Si el juego arrancó por el UART, ese sondeo no le llega (nadie
-lo lee). Pero si el juego **sí** lee el UART, puede recibir esas peticiones como
-basura por la entrada.
+**Qué se ve.** Un juego que lee el UART interpreta como teclas cualquier cosa
+que llegue ahí. Es un caso real: Space Invaders lee `a`, `d`, `q` y espacio; si
+un agente sondea `/` o manda `/uart?cmd=...` mientras se juega, el juego **se
+mueve solo o dispara solo**, y no hay forma de saber por qué mirando la
+pantalla.
 
-**Qué hacer.** En programas que mezclan UART y juego, parar el sondeo antes de
-arrancar y reanudarlo al depurar.
+**Qué hacer.**
+
+- No sondear el HTTP mientras se prueba un juego que lee el UART: cerrar la
+  pestaña del índice o no lanzar `emu_agent.py` en bucle. Una petición a
+  `/screen.png` no escribe en el UART, pero `/uart?cmd=` sí.
+- Si hace falta depurar por HTTP **y** jugar a la vez, el programa debe
+  descartar la entrada que no espere (teclas válidas solamente), o el agente
+  debe usar solo las rutas de lectura (`/screen.png`, `/vram.txt`,
+  `/state.txt`, `/console.txt`).
