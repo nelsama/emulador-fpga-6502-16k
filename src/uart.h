@@ -55,6 +55,21 @@ public:
   // Entrada desde el host (PuTTY). Si RX_VALID ya estaba activo, marca overrun.
   void enqueue_rx(uint8_t v);
 
+  // Descarta lo que quede por entregar al CPU y el byte en recepcion.
+  //
+  // Lo usa el boton LOAD al reiniciar la CPU: el juego que se estaba
+  // ejecutando no lee el UART, asi que los comandos que se le mandaron se
+  // quedan en la FIFO. Sin vaciarla, al volver al monitor llegan de golpe y el
+  // monitor los ejecuta como si se hubieran tecleado (o los descarta por
+  // overrun). Reiniciar la CPU solo rearma el PC: la FIFO es del periferico y
+  // sigue igual en el hardware, de ahi que haya que limpiarla aparte.
+  void reset_rx() {
+    rx_fifo_.clear();
+    rx_valid_ = false;
+    rx_error_ = false;
+    rx_overrun_ = false;
+  }
+
   // Avanza el temporizador de recepción serial. "cycles" son ciclos de CPU
   // (3.375 MHz). Sin esto, todos los bytes llegarían "ya recibidos" a la vez y
   // el monitor (que sondea cuántos quedan antes de leer) cortaría el eco.

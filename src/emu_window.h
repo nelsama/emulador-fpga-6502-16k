@@ -216,7 +216,9 @@ private:
 
   // Geometría del módulo SD.
   static constexpr int FILA_SD = 18;    // alto de cada fila de archivo
-  static constexpr int BOTON_SD = 34;   // ancho de los botones REN/DEL
+  // Ancho de los botones de la fila. El mas largo es "LOAD": 4 letras de 8 px
+  // mas el margen interior y el borde.
+  static constexpr int BOTON_SD = 36;
   std::vector<ArchivoSd> listado_sd_;
   // Zonas clicables del menú, en coordenadas del renderer.
   struct Zona { int x, y, w, h; std::string accion; std::string arg; };

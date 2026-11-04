@@ -244,6 +244,11 @@ int main(int argc, char** argv) {
     // terminal solo en modo UART). De momento basta con el aviso por consola.
     std::printf("Teclado -> %s\n", uart ? "UART" : "joystick");
   };
+  // Comando que hay que inyectar al UART un poco despues (ver el boton LOAD):
+  // el monitor necesita procesar el LOAD antes de recibir el R.
+  std::string comando_diferido;
+  auto instante_comando = std::chrono::steady_clock::now();
+
   // Menú SD de la ventana: las acciones llegan aquí, que es donde están la
   // tarjeta y la emulación.
   window.on_sd_accion = [&](const std::string& accion, const std::string& arg) {
@@ -265,6 +270,63 @@ int main(int argc, char** argv) {
     if (accion == "remount") {
       remontar();
       std::printf("SD: re-montaje pedido al monitor\n");
+      return;
+    }
+    if (accion == "run_ok") {
+      // Aceptado el diálogo: `arg` llega como "<archivo>\n<direccion>".
+      //
+      // Equivale a reiniciar la maquina y teclear en el monitor
+      //     <reset>
+      //     LOAD <nombre> <dir>
+      //     R <dir>
+      //
+      // El reset es IMPRESCINDIBLE para que funcione dos veces seguidas: si el
+      // boton anterior ya lanzó un juego, la CPU esta ejecutando ese programa y
+      // el nuevo LOAD se queda en la FIFO del UART sin que nadie lo lea (los
+      // juegos no leen del UART). Al reiniciar se vuelve al monitor.
+      //   - `cpu.reset()` hace lo mismo que el comando `Q` del monitor.
+      //   - `uart.reset_rx()` descarta lo que quedara pendiente: si no, los
+      //     comandos viejos llegarian de golpe al monitor nuevo.
+      //
+      // El monitor necesita tiempo para procesar el LOAD (lee el archivo por la
+      // SD y lo copia a RAM), asi que el `R` no puede ir detras en el mismo
+      // instante: se inyecta desde el bucle, pasado un margen. Ver
+      // `comando_diferido` mas abajo.
+      const size_t nl = arg.find('\n');
+      if (nl == std::string::npos) return;
+      const std::string nombre = arg.substr(0, nl);
+      const std::string dir = arg.substr(nl + 1);
+      if (nombre.empty()) return;
+
+      // Validar la dirección: hexa de 1 a 4 dígitos, dentro de la RAM ($0000-$3FFF).
+      // El monitor escribe en RAM, asi que fuera de ese rango no tiene sentido.
+      bool ok_dir = !dir.empty() && dir.size() <= 4;
+      unsigned dirv = 0;
+      for (char c : dir) {
+        int d;
+        if (c >= '0' && c <= '9') d = c - '0';
+        else if (c >= 'A' && c <= 'F') d = c - 'A' + 10;
+        else if (c >= 'a' && c <= 'f') d = c - 'a' + 10;
+        else { ok_dir = false; break; }
+        dirv = dirv * 16u + (unsigned)d;
+      }
+      if (!ok_dir || dirv > 0x3FFF) {
+        std::fprintf(stderr,
+                     "SD: direccion '%s' invalida (hexa de 0000 a 3FFF)\n",
+                     dir.c_str());
+        return;
+      }
+      char dir_txt[8];
+      std::snprintf(dir_txt, sizeof dir_txt, "%04X", dirv);
+
+      cpu.reset();
+      uart.reset_rx();
+      comando_diferido.clear();
+      const std::string cmd = "LOAD " + nombre + " " + dir_txt + "\r";
+      for (char c : cmd) uart.enqueue_rx((uint8_t)(unsigned char)c);
+      comando_diferido = std::string("R ") + dir_txt + "\r";
+      instante_comando = std::chrono::steady_clock::now();
+      std::printf("SD: reset + LOAD %s %s + ejecutar\n", nombre.c_str(), dir_txt);
       return;
     }
     if (accion == "add") {
@@ -601,6 +663,18 @@ int main(int argc, char** argv) {
     // Avanzar los periféricos con los ciclos de CPU realmente transcurridos.
     uart.tick((uint32_t)executed);
     bus.timer()->tick((uint32_t)executed);
+
+    // Segundo comando del boton LOAD ("R 0800"): se manda cuando el monitor ha
+    // tenido tiempo de procesar el LOAD. 800 ms cubren el arranque del monitor
+    // tras el reset (inicializa la SD y monta MicroFS, ~0,3 s) y la lectura del
+    // archivo; aun se nota como respuesta inmediata.
+    if (!comando_diferido.empty()) {
+      const auto esperado = instante_comando + std::chrono::milliseconds(800);
+      if (clock::now() >= esperado) {
+        for (char c : comando_diferido) uart.enqueue_rx((uint8_t)(unsigned char)c);
+        comando_diferido.clear();
+      }
+    }
 
     // VBLANK del Core de Video, atado al reloj de pared.
     //

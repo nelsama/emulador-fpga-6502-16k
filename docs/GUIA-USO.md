@@ -1327,11 +1327,16 @@ listado de la tarjeta y sus acciones. Todo es **clicable con el ratón**:
 
 ```
   SD                                    [Remontar] [+ Añadir]
-  JUEGO.BIN      14043                      [REN] [DEL]
-  TETRIS.BIN     13626                      [REN] [DEL]
+  JUEGO.BIN      14043                [RUN] [REN] [DEL]
+  TETRIS.BIN     13626                [RUN] [REN] [DEL]
   ...
 ```
 
+- **`RUN`**: **carga el programa y lo ejecuta** sin abrir PuTTY. Abre un cuadro
+  con la **dirección de carga en hexa** (`0800` por defecto, seleccionada para
+  teclearla directamente); **Enter** o **`Aceptar`** arranca. Equivale a
+  reiniciar la máquina y teclear en el monitor `LOAD <nombre> <dir>` y luego
+  `R <dir>`.
 - **`+ Añadir`**: abre el selector de archivos de Windows; el elegido se escribe
   en la imagen SD **sin reiniciar** el emulador, con su nombre de archivo.
 - **`REN`**: renombra esa fila. Abre un cuadro con el nombre **seleccionado**
@@ -1340,6 +1345,26 @@ listado de la tarjeta y sus acciones. Todo es **clicable con el ratón**:
 - **`DEL`**: primer clic, el botón se pone en rojo como **`SEG`** pidiendo
   confirmación; el segundo borra. Un clic en otro sitio cancela.
 - **`Remontar`**: manda `sd` al monitor para que **relea el directorio**.
+
+> **`RUN` reinicia la CPU a propósito.** Tras lanzar un juego, la CPU ya no está
+> en el monitor: está ejecutando el programa, que **no lee el UART**. Un segundo
+> `LOAD` se quedaría en la FIFO del puerto serie sin que nadie lo leyera (lo que
+> hacía que "el segundo botón no cargara"). Por eso `RUN` hace siempre:
+>
+> 1. **reset de la CPU** (lo mismo que el comando `Q` del monitor),
+> 2. **vacia la FIFO de entrada del UART** (si no, los comandos viejos llegarían
+>    de golpe al monitor nuevo),
+> 3. manda `LOAD <nombre> <dir>`,
+> 4. manda `R <dir>` **~0,8 s después**, cuando el monitor ya ha arrancado, ha
+>    montado la SD y ha cargado el archivo.
+>
+> Consecuencia práctica: **`RUN` pierde el estado** de lo que estuviera corriendo
+> (RAM y periféricos vuelven al arranque); lo que haya en la SD, no. Es lo que se
+> quiere al probar un programa, pero no sirve para "cargar encima" de otro.
+>
+> **La dirección** se valida: hexa de 1 a 4 dígitos, y **`0000`-`3FFF`**, que es
+> la RAM de 16 KB. Fuera de ese rango el emulador lo rechaza y lo dice por la
+> consola de diagnóstico, sin tocar la máquina.
 
 > **El monitor cachea el listado.** Los cambios en la imagen son inmediatos,
 > pero el firmware 6502 sigue viendo la lista vieja hasta que se re-monta. La

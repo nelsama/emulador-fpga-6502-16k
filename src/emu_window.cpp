@@ -440,9 +440,13 @@ void EmuWindow::dibujar_boton_vista(void* renderer, int x, int y, int w, int h,
 // las zonas clicables).
 void EmuWindow::clic_en(int x, int y) {
   // 1) Diálogo de texto abierto: solo responden sus botones (el campo va por
-  //    teclado). Se comprueban antes que cualquier otra zona.
+  //    teclado). Se comprueban antes que cualquier otra zona, y SOLO las suyos:
+  //    sus rectángulos pueden solaparse con los del módulo SD (el diálogo se
+  //    dibuja encima) y, como las zonas del módulo se añaden antes a la lista,
+  //    sin este filtro ganaba el botón de debajo.
   if (dialogo_.activo) {
     for (const Zona& z : zonas_) {
+      if (z.accion != "dialogo_ok" && z.accion != "dialogo_cancelar") continue;
       if (x < z.x || x >= z.x + z.w || y < z.y || y >= z.y + z.h) continue;
       if (z.accion == "dialogo_ok") {
         dialogo_.activo = false;
@@ -493,6 +497,17 @@ void EmuWindow::clic_en(int x, int y) {
         term_sucio_ = true;
         std::printf("Terminal: %s\n", nuevo ? "UTF-8" : "CP437");
         std::fflush(stdout);
+      } else if (z.accion == "run_pedir") {
+        // Diálogo pidiendo la dirección de carga. Se reutiliza el diálogo de
+        // texto: al aceptar (Enter o "Ok") llega como "run_ok" con
+        // "<archivo>\n<direccion>". La dirección va en hexa y se valida en
+        // main.cpp, que es quien conoce la máquina.
+        dialogo_.activo = true;
+        dialogo_.titulo = "Ejecutar " + z.arg + " en (hexa)";
+        dialogo_.texto = "0800";
+        dialogo_.seleccionado = true;  // teclear sustituye el valor
+        dialogo_.accion = "run";
+        dialogo_.arg = z.arg;
       } else if (z.accion == "rename_archivo") {
         dialogo_.activo = true;
         dialogo_.titulo = "Nuevo nombre para " + z.arg;
@@ -887,17 +902,28 @@ int EmuWindow::dibujar_modulo_sd(void* renderer, int x, int y) {
     texto(x + 10 + 14 * TERM_CW, fy + 2, tam, SDL_Color{130, 142, 160, 255});
 
     // Botones de la fila. Se dibujan con texto porque la fuente CP437 no
-    // tiene iconos: REN (renombrar) y DEL/SEG (borrar / confirmar borrado).
-    const int bx = x + mod.w - 14 - 2 * (BOTON_SD + 4);
+    // tiene iconos: RUN (cargar y ejecutar), REN (renombrar) y DEL/SEG
+    // (borrar / confirmar borrado).
+    const int bx = x + mod.w - 14 - 3 * (BOTON_SD + 4);
     {
+      // RUN: abre un diálogo para fijar la dirección de carga (0800 por
+      // defecto) y, al aceptar, carga el archivo ahí y lo ejecuta. Equivale a
+      // reiniciar la máquina y teclear "LOAD <nombre> <dir>" y "R <dir>".
       SDL_Rect b{bx, fy + 1, BOTON_SD, FILA_SD - 2};
+      SDL_SetRenderDrawColor(ren, 46, 74, 58, 255);
+      SDL_RenderFillRect(ren, &b);
+      texto(b.x + 3, b.y + 1, "RUN", SDL_Color{190, 235, 200, 255});
+      zonas_.push_back(Zona{b.x, b.y, b.w, b.h, "run_pedir", a.nombre});
+    }
+    {
+      SDL_Rect b{bx + BOTON_SD + 4, fy + 1, BOTON_SD, FILA_SD - 2};
       SDL_SetRenderDrawColor(ren, 56, 66, 86, 255);
       SDL_RenderFillRect(ren, &b);
       texto(b.x + 3, b.y + 1, "REN", SDL_Color{200, 215, 235, 255});
       zonas_.push_back(Zona{b.x, b.y, b.w, b.h, "rename_archivo", a.nombre});
     }
     {
-      SDL_Rect b{bx + BOTON_SD + 4, fy + 1, BOTON_SD, FILA_SD - 2};
+      SDL_Rect b{bx + 2 * (BOTON_SD + 4), fy + 1, BOTON_SD, FILA_SD - 2};
       const bool confirmar = (fila_borrar_ == i);
       SDL_SetRenderDrawColor(ren, confirmar ? 130 : 56, confirmar ? 44 : 66,
                              confirmar ? 44 : 86, 255);
