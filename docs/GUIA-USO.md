@@ -1381,6 +1381,12 @@ El módulo tiene **alto variable**: con la tarjeta vacía ocupa una fila de avis
 y crece hasta mostrar **16 archivos** (el máximo de la MicroFS). La ventana
 crece o encoge con él para que la consola de 24 filas no se recorte nunca.
 
+> **Si la ventana no cabe en la pantalla** (portátil con DPI alto, o muchos
+> archivos en la tarjeta), la consola de 24 filas **tiene prioridad**: se recorta
+> la lista de la SD y se navega por ella con la **rueda del ratón** encima del
+> módulo. Antes crecía el módulo y la última fila de la consola — con el cursor —
+> quedaba por debajo del borde de la ventana.
+
 Equivalente por HTTP (ver [Herramientas de SD](#7-herramientas-de-sd)):
 `/sdcard/ls`, `/sdcard/write`, `/sdcard/delete`, `/sdcard/rename`.
 

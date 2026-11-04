@@ -110,6 +110,19 @@ int alto_panel(int filas_sd) {
          TerminalState::ROWS * 16 + 2 * 8 + 12;
 }
 
+// Filas de archivo que se muestran como máximo para que el panel quepa en
+// `alto_disponible`. La consola SIEMPRE conserva sus 24 filas: si la tarjeta
+// tiene más archivos de los que caben, el módulo SD recorta la lista y se
+// navega por ella, en vez de empujar la consola fuera de la ventana.
+int filas_sd_visibles(int total_archivos, int alto_disponible) {
+  const int fijo = ALTO_ESTADO_PANEL + SD_CABECERA + SD_MARGEN_INFERIOR +
+                   TerminalState::ROWS * 16 + 2 * 8 + 12;
+  int caben = (alto_disponible - fijo) / 18;
+  if (caben < 1) caben = 1;
+  if (total_archivos > 0 && caben > total_archivos) caben = total_archivos;
+  return caben;
+}
+
 void draw_glyph(SDL_Renderer* r, int x, int y, char c, int f) {
   // La fuente cubre ASCII desde $20. Lo no imprimible se pinta como espacio.
   // `f` es el factor de escala de cada píxel del glifo.
@@ -220,20 +233,23 @@ bool EmuWindow::start(int video_w, int video_h, int scale, bool terminal) {
   // dimensiona para el caso actual.
   const int panel_alto = terminal_ ? alto_panel((int)listado_sd_.size()) : 0;
   if (alto_ventana < panel_alto) alto_ventana = panel_alto;
-  alto_ventana_previo_ = alto_ventana;
 
   // No pasarse de la pantalla: con la barra de tareas y el DPI escalado, una
   // ventana más alta que el escritorio deja parte del vídeo fuera.
+  //
+  // `SDL_GetDisplayUsableBounds` YA descuenta la barra de tareas, así que el
+  // margen solo tiene que cubrir la barra de TÍTULO y el borde inferior (~40 px
+  // con DPI 125%). Antes se restaban 100 y eso recortaba 60 px del panel: la
+  // última fila de la consola y el cursor desaparecían tras el borde inferior
+  // (con 6 archivos el panel pide 778 y la ventana se quedaba en 716).
   {
     SDL_Rect usable{0, 0, 0, 0};
     if (SDL_GetDisplayUsableBounds(0, &usable) == 0 && usable.h > 0) {
-      // 80 px: barra de tareas (~40 con DPI 125%) + barra de título. Necesita
-      // margen de sobra porque SDL devuelve el escritorio completo, no el área
-      // libre real.
-      const int max_alto = usable.h - 100;
+      const int max_alto = usable.h - 46;
       if (max_alto > panel_alto && alto_ventana > max_alto) alto_ventana = max_alto;
     }
   }
+  alto_ventana_previo_ = alto_ventana;
 
   // Mandos del PC: si no hay ninguno, SDL simplemente no genera eventos. Se
   // inicializa aparte para que un fallo no impida abrir la ventana.
@@ -371,9 +387,12 @@ void EmuWindow::ajustar_alto_ventana() {
   SDL_GetWindowSize(win, &ww, &wh);
   int objetivo = alto_panel((int)listado_sd_.size());
 
+  // Mismo margen que en start(): `usable` ya descuenta la barra de tareas, así
+  // que solo hay que cubrir la barra de título. Restar 100 aquí recortaba la
+  // última fila de la consola (y el cursor) cuando el panel no cabía.
   SDL_Rect usable{0, 0, 0, 0};
   if (SDL_GetDisplayUsableBounds(0, &usable) == 0 && usable.h > 0) {
-    const int max_alto = usable.h - 100;
+    const int max_alto = usable.h - 46;
     if (objetivo > max_alto) objetivo = max_alto;
   }
   if (objetivo == wh || objetivo == alto_ventana_previo_) return;
@@ -882,11 +901,25 @@ int EmuWindow::dibujar_modulo_sd(void* renderer, int x, int y) {
   // Las zonas se regeneran en cada vuelta: `present()` limpia la lista una vez
   // por fotograma, antes de dibujar el módulo y el diálogo.
   const int n = (int)listado_sd_.size();
-  const int filas = n < 1 ? 1 : n;   // con la tarjeta vacía, una fila de aviso
+  // Filas que caben segun el alto disponible; se calcula en `present()`
+  // (0 = sin limite). La consola tiene prioridad: si la tarjeta tiene mas
+  // archivos que huecos, la lista se recorta y se navega con la rueda, en vez
+  // de empujar la consola fuera de la ventana.
+  int visibles = n < 1 ? 1 : n;
+  if (sd_filas_max_ > 0 && visibles > sd_filas_max_) visibles = sd_filas_max_;
+  if (sd_primera_fila_ > 0 && sd_primera_fila_ + visibles > n)
+    sd_primera_fila_ = n > visibles ? n - visibles : 0;
+  if (sd_primera_fila_ < 0) sd_primera_fila_ = 0;
+  const int filas = visibles;
   const int cab = 22;                // cabecera con el botón
   const int alto = cab + filas * FILA_SD + 8;
 
   SDL_Rect mod{x, y, panel_w_ - 2 * PANEL_MARGEN, alto};
+  // Se guarda para que la rueda del ratón sepa si está sobre la lista.
+  sd_x_ = mod.x;
+  sd_y_ = mod.y;
+  sd_w_ = mod.w;
+  sd_modulo_alto_ = alto;
   fill_round_rect(ren, mod, 6, SDL_Color{24, 28, 34, 255});
   SDL_SetRenderDrawColor(ren, 44, 50, 60, 255);
   SDL_RenderDrawRect(ren, &mod);
@@ -951,9 +984,11 @@ int EmuWindow::dibujar_modulo_sd(void* renderer, int x, int y) {
     texto(x + 10, y + cab + 2, "(vacia)", SDL_Color{130, 140, 155, 255});
   }
 
-  for (int i = 0; i < n; i++) {
+  for (int v = 0; v < filas; v++) {
+    const int i = sd_primera_fila_ + v;
+    if (i >= n) break;
     const ArchivoSd& a = listado_sd_[(size_t)i];
-    const int fy = y + cab + i * FILA_SD;
+    const int fy = y + cab + v * FILA_SD;
     SDL_Rect fila{x + 4, fy, mod.w - 8, FILA_SD};
     if (i == fila_resaltada_) {
       SDL_SetRenderDrawColor(ren, 44, 50, 62, 255);
@@ -1186,6 +1221,13 @@ void EmuWindow::present(const uint32_t* rgb, uint8_t leds) {
     SDL_SetRenderDrawColor(ren, 34, 37, 43, 255);
     SDL_RenderFillRect(ren, &panel);
 
+    // Cuántas filas de archivo caben: la consola de 24 filas tiene prioridad, así
+    // que si la tarjeta trae más archivos que huecos la lista se recorta (se
+    // navega con la rueda) en vez de empujar la consola fuera de la ventana.
+    sd_filas_max_ = area_h - ALTO_ESTADO_PANEL > 0
+                        ? filas_sd_visibles((int)listado_sd_.size(), area_h)
+                        : 0;
+
     // Separador vertical entre el panel y el vídeo.
     SDL_SetRenderDrawColor(ren, 52, 57, 66, 255);
     SDL_RenderDrawLine(ren, panel_w_ - 1, 0, panel_w_ - 1, area_h);
@@ -1337,19 +1379,31 @@ bool EmuWindow::poll() {
         break;
       }
 
-      // --- Rueda del ratón: scroll del terminal ---
-      // Solo actúa si el cursor está sobre la consola; en el resto de la
-      // ventana no hace nada (no hay nada más que desplazar).
+      // --- Rueda del ratón: scroll de la consola o de la lista SD ---
+      // Según dónde esté el cursor. En el resto de la ventana no hace nada.
       case SDL_MOUSEWHEEL: {
-        if (!term_caja_valida_) break;
         int mx = 0, my = 0;
         SDL_GetMouseState(&mx, &my);
+        const int pasos =
+            ev.wheel.y * (ev.wheel.direction == SDL_MOUSEWHEEL_FLIPPED ? -1 : 1);
+        // Lista SD recortada: se navega con la rueda. Solo si hay más archivos
+        // que huecos, para no “mover” una lista que ya se ve entera.
+        if (sd_modulo_alto_ > 0 && mx >= sd_x_ && mx < sd_x_ + sd_w_ &&
+            my >= sd_y_ && my < sd_y_ + sd_modulo_alto_ &&
+            sd_filas_max_ > 0 && (int)listado_sd_.size() > sd_filas_max_) {
+          const int max_primera = (int)listado_sd_.size() - sd_filas_max_;
+          sd_primera_fila_ -= pasos;
+          if (sd_primera_fila_ > max_primera) sd_primera_fila_ = max_primera;
+          if (sd_primera_fila_ < 0) sd_primera_fila_ = 0;
+          break;
+        }
+
+        if (!term_caja_valida_) break;
         if (mx < term_x_ || mx >= term_x_ + term_w_ || my < term_y_ ||
             my >= term_y_ + term_h_)
           break;
         // Rueda arriba (y > 0) = hacia el historial. `direction` puede ser
         // reversed según el sistema; se respeta, que es lo que espera el usuario.
-        const int pasos = ev.wheel.y * (ev.wheel.direction == SDL_MOUSEWHEEL_FLIPPED ? -1 : 1);
         if (pasos != 0) desplazar_terminal(pasos * 3);  // 3 líneas por muesca
         break;
       }

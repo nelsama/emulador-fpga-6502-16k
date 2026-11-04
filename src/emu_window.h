@@ -243,6 +243,13 @@ private:
   int fila_resaltada_ = -1;   // archivo bajo el ratón
   int fila_borrar_ = -1;      // archivo pendiente de confirmar borrado
   int alto_modulo_sd_ = 0;    // alto actual del módulo (para la ventana)
+  // Filas de archivo que caben en el módulo SD con el alto disponible (0 = sin
+  // límite). La consola tiene prioridad: si no caben todas, la lista se recorta
+  // y se navega con la rueda, en vez de quedar la consola fuera de la ventana.
+  int sd_filas_max_ = 0;
+  int sd_primera_fila_ = 0;   // primera fila visible cuando la lista se recorta
+  // Caja del módulo SD en coordenadas de ventana (la rellena present()).
+  int sd_x_ = 0, sd_y_ = 0, sd_w_ = 0, sd_modulo_alto_ = 0;
   int alto_ventana_previo_ = 0;  // último alto pedido en ajustar_alto_ventana()
   int w_ = 320;
   int h_ = 240;
