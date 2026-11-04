@@ -1326,12 +1326,17 @@ El panel tiene un **módulo SD** fijo, entre el puerto 1 y la consola, con el
 listado de la tarjeta y sus acciones. Todo es **clicable con el ratón**:
 
 ```
-  SD                                    [Remontar] [+ Añadir]
-  JUEGO.BIN      14043                [RUN] [REN] [DEL]
-  TETRIS.BIN     13626                [RUN] [REN] [DEL]
+  SD                               [RESET] [Montar] [Remontar] [+ Añadir]
+  JUEGO.BIN      14043           [RUN] [REN] [DEL]
+  TETRIS.BIN     13626           [RUN] [REN] [DEL]
   ...
 ```
 
+- **`RESET`**: **reinicia la CPU**, igual que el comando `Q` del monitor, pero
+  desde el ratón. Es la salida cuando un programa **se cuelga** o entra en un
+  bucle que no lee el UART: entonces no hay forma de teclear `Q`. Vacía también
+  la cola de entrada del UART (lo pendiente era para el programa anterior) y
+  **no** toca la SD, el vídeo ni el SID — es reset de CPU, como en la placa.
 - **`RUN`**: **carga el programa y lo ejecuta** sin abrir PuTTY. Abre un cuadro
   con la **dirección de carga en hexa** (`0800` por defecto, seleccionada para
   teclearla directamente); **Enter** o **`Aceptar`** arranca. Equivale a

@@ -267,6 +267,21 @@ int main(int argc, char** argv) {
       window.set_listado_sd(std::move(lista));
       return;
     }
+    if (accion == "reset_cpu") {
+      // RESET de la maquina, igual que el comando `Q` del monitor, pero desde el
+      // raton: sirve cuando el programa en marcha se cuelga o entra en un bucle
+      // que no lee el UART, y entonces no hay forma de teclear `Q`.
+      //
+      // Se vacia tambien la FIFO de entrada: lo que hubiera pendiente se envio
+      // al programa anterior y no debe ejecutarse como comandos del monitor.
+      // El resto de perifericos (SD, video, SID) NO se reinician: en el
+      // hardware, `Q` tambien es solo un reset de la CPU.
+      cpu.reset();
+      uart.reset_rx();
+      comando_diferido.clear();
+      std::printf("RESET: CPU reiniciada\n");
+      return;
+    }
     if (accion == "remount") {
       remontar();
       std::printf("SD: re-montaje pedido al monitor\n");

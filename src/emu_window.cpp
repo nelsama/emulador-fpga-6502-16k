@@ -882,6 +882,18 @@ int EmuWindow::dibujar_modulo_sd(void* renderer, int x, int y) {
     SDL_RenderDrawRect(ren, &m);
     texto(m.x + 6, m.y + 1, "Montar", SDL_Color{215, 200, 250, 255});
     zonas_.push_back(Zona{m.x, m.y, m.w, m.h, "mount_img", ""});
+
+    // RESET de la maquina: reinicia la CPU y vacia la FIFO del UART, igual que
+    // el comando `Q` del monitor. Es la salida cuando un programa se cuelga o
+    // se queda en un bucle sin atender el UART (y por tanto sin poder `Q`).
+    const int sw = 5 * TERM_CW + 12;
+    SDL_Rect s{m.x - sw - 6, y + 3, sw, 16};
+    SDL_SetRenderDrawColor(ren, 84, 44, 44, 255);
+    SDL_RenderFillRect(ren, &s);
+    SDL_SetRenderDrawColor(ren, 220, 120, 120, 255);
+    SDL_RenderDrawRect(ren, &s);
+    texto(s.x + 6, s.y + 1, "RESET", SDL_Color{250, 205, 205, 255});
+    zonas_.push_back(Zona{s.x, s.y, s.w, s.h, "reset_cpu", ""});
   }
 
   if (n == 0) {
