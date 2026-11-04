@@ -14,6 +14,9 @@ pantalla manuales — incluido por un agente de IA.
 >   ver el emulador, cómo capturarlo y qué trampas evitar.
 > - [`PROCEDIMIENTOS.md`](PROCEDIMIENTOS.md) — cómo se midió y verificó cada
 >   periférico, y las trampas encontradas.
+> - [`RESTRICCIONES-SOFTWARE.md`](RESTRICCIONES-SOFTWARE.md) — lo que el
+>   software **no** puede hacer si quiere seguir comunicándose con el emulador
+>   (UART sin leer, tiempos del monitor, modo de teclado, 8.3...).
 > - [`PUTTY-SETUP.md`](PUTTY-SETUP.md) — configuración del terminal.
 
 ---

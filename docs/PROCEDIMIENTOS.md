@@ -22,6 +22,8 @@ Sirve para dos cosas:
 6. [Verificar el SID player](#6-verificar-el-sid-player)
 7. [Fidelidad frente al hardware real](#7-fidelidad-frente-al-hardware-real)
 8. [Verificar el terminal de consola](#8-verificar-el-terminal-de-consola)
+   - [8bis. Socket del UART que no se libera](#8bis-socket-del-uart-que-no-se-libera-close_wait)
+   - [8ter. HTTP: RST al cerrar la conexión](#8ter-servidor-http-de-depuración-rst-al-cerrar-la-conexión)
 9. [Trampas encontradas](#9-trampas-encontradas)
 10. [Plantilla de verificación rápida](#10-plantilla-de-verificación-rápida)
 
@@ -418,6 +420,59 @@ Cliente desconectado (conexión perdida (error 10054))
 
 **Regla:** un `recv()`/`send()` que devuelve error nunca es "solo
 transitorio" sin comprobar el código. Y el log debe decir el motivo.
+
+---
+
+## 8ter. Servidor HTTP de depuración: RST al cerrar la conexión
+
+Síntoma: `emulador.exe` vivo (en `tasklist`), pero `http://localhost:8080`
+contestaba `connection refused`. Aparecía tras un `POST /sdcard/write` seguido
+de `/sdcard/ls`; `emu_agent.py status` tampoco lo detectaba.
+
+Causa encontrada: `DebugServer::step()` cierra la conexión en cuanto termina de
+enviar la respuesta. En Windows, cerrar un socket que aún tiene datos sin leer en
+el buffer de recepción **aborta la conexión con RST** en vez de mandar un FIN.
+Con un cliente que reutiliza el socket (petición encadenada o HTTP/1.1
+keep-alive), el RST se lleva por delante la petición que venía detrás, y el
+cliente lo ve como un fallo de conexión.
+
+El contenido de la respuesta y el cierre son **dos cosas independientes**: se
+puede tener todas las respuestas correctas y un cierre abortado. Hay que medir
+las dos por separado.
+
+### Cómo se comprobó (y por qué se perdió tiempo)
+
+1. Las peticiones secuenciales **no** lo reproducen: hace falta que el cliente
+   mande más de una por la misma conexión, o que no cierre.
+2. Hay que **verificar que el emulador que se prueba es el recién compilado**.
+   Si se lanza con `taskkill` y `Start-Process` en la misma línea, el nuevo a
+   veces no arranca ("puerto 4000 en uso") y los resultados describen al
+   proceso viejo. Comprobarlo con la fecha de `emulador.exe` y con
+   `tasklist` antes de medir.
+3. `EMU_DBG_HTTP=1` imprime cada transición de estado de la conexión en
+   `stderr`. Sin esa traza el diagnóstico es a ciegas.
+
+### Prueba recomendada
+
+Antes de tocar este código, escribir `tools/test_debug_http.cpp` (como
+`test_tcp_puerto`): monta un `DebugServer` sin SDL y comprueba, para cada patrón
+de cliente, **dos cosas por separado**:
+
+| Patrón | Respuestas esperadas | Cierre esperado |
+|---|---|---|
+| una petición, cliente cierra | 1 | FIN |
+| dos encadenadas en el mismo `send` | 2 | FIN |
+| dos con 10 / 100 / 250 ms entre medias | 2 | FIN |
+| `Connection: keep-alive` | 1 | FIN |
+| `Connection: close` | 1 | FIN |
+| cliente que conecta y no dice nada | 0 | sin bloquear el bucle |
+
+Con eso el ciclo de comprobación es de milisegundos, no de minutos, y no hace
+falta abrir ventana ni SDL.
+
+**Estado:** el RST está identificado con precisión, pero **sin arreglo** a fecha
+de este documento. Los intentos que devolvían todas las respuestas dejaban el
+RST, y los que cerraban limpio perdían la petición que llegaba tarde.
 
 ---
 

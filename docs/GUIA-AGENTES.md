@@ -6,7 +6,10 @@ usen el emulador para desarrollar y depurar software del `fpga-6502-16k`.
 Responde a una pregunta: *¿qué puede ver un agente del estado de la máquina y
 cómo, sin abrir la ventana ni leer una captura a ojo?*
 
-La guía de uso completa está en [`GUIA-USO.md`](GUIA-USO.md).
+La guía de uso completa está en [`GUIA-USO.md`](GUIA-USO.md). Lo que el
+programa depurado **no** debe hacer (y que hace que el emulador «no conteste»)
+está en [`RESTRICCIONES-SOFTWARE.md`](RESTRICCIONES-SOFTWARE.md): un juego que no
+lee el UART no atiende `Q`, y encadenar `LOAD` y `R` sin esperar los pierde.
 
 ---
 
