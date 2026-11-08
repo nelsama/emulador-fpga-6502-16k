@@ -940,6 +940,44 @@ El frame resultante se guarda en `Video::last_frame()` y es lo que sirve
 CPU haya tocado la VRAM entre medias. Para el estado actual de la memoria está
 `/vram.txt`.
 
+#### Escribir durante el barrido: qué es fiel y qué no
+
+El hardware tiene la VRAM en **doble puerto**: el CPU escribe por uno y el
+barrido lee por otro. Escrituras y lecturas son independientes y **la memoria
+nunca se corrompe**. El único efecto de escribir a mitad de frame es el
+**tearing**: la parte de pantalla ya dibujada muestra el valor viejo y la que
+falta por dibujar el nuevo, con un corte horizontal.
+
+El caso que confunde: **el OAM no es «más seguro» que el tilemap**. También se
+evalúa línea a línea mientras se llena el line buffer, así que un sprite escrito
+a mitad de frame sale partido. El motivo para escribir en VBLANK es la
+**coherencia visual**, no la integridad de la memoria.
+
+> ⚠️ **El emulador NO reproduce el tearing.** `tick_frame()` avanza línea a
+> línea para VBLANK y `SOLID_HIT`, pero el *render* es por frame completo: todo
+> el frame usa el estado de la VRAM en el instante de `render()`. Un programa
+> que respete VBLANK se ve idéntico al hardware; solo difiere si estás
+> depurando un bug de tearing concreto, y entonces el emulador muestra una imagen
+> «más limpia» que la placa real.
+
+| Comportamiento | FPGA | Emulador |
+|---|---|---|
+| Escribir a mitad de frame corrompe la VRAM | ❌ no | ❌ no (igual) |
+| Se pierde o mezcla una escritura | ❌ no | ❌ no (igual) |
+| Tearing (mitad vieja / mitad nueva) | ✅ sí | ❌ **no**: frame entero con el valor nuevo |
+| Escrituras ignoradas durante `init`/`SETUP` | ✅ sí | ✅ **sí** (`write_vram()` sale si `setup_busy_`) |
+
+La excepción real de hardware sí está reproducida: mientras se inicializa el
+core o dura un `SETUP` (`$D816`), las escrituras del CPU a la VRAM se
+descartan, y `VIDEO_READY` (bit 4 de `$D803`) es lo que indica cuándo se puede
+escribir. Los registros de scroll y paleta **no** pasan por esa protección y se
+pueden escribir en cualquier momento.
+
+> Fuente: `docs/07-MANUAL-PROGRAMACION.md` §1.1 y §6.2c del proyecto del FPGA
+> (commits `0ae9253` y `b2aff50`). Las reglas de prioridad y transparencia entre
+> sprites de aquel documento ya están descritas en [Sprites: gana el índice
+> menor](#sprites-gana-el-índice-menor-y-solo-caben-8-por-línea).
+
 #### Estado inicial de la VRAM
 
 Al arrancar, el core deja la VRAM en un estado **concreto** que conviene conocer,
