@@ -151,7 +151,7 @@ def http(debug: int, ruta: str) -> bytes:
 def main() -> int:
     p = argparse.ArgumentParser(description="Controla el emulador desde un script.")
     p.add_argument("accion", choices=[
-        "start", "stop", "status", "screenshot", "load", "run", "runfile", "state",
+        "start", "stop", "status", "screenshot", "load", "run", "runfile", "joy", "state",
         "vram", "ram"])
     p.add_argument("arg1", nargs="?", help="argumento (fichero, dirección, ...)")
     p.add_argument("arg2", nargs="?", help="segundo argumento (dirección)")
@@ -195,6 +195,21 @@ def main() -> int:
     elif a.accion == "run":
         addr = a.arg1 or "0800"
         print(enviar(a.uart, f"r {addr}", 1.5).strip())
+    elif a.accion == "joy":
+        # Botones del joystick sin pasar por el UART: up, down, left, right, fire.
+        #   joy fire            pulsa y suelta en 150 ms
+        #   joy left,fire 1500  pulsa ambos 1500 ms
+        #   joy release         suelta todo
+        #   joy fire 0          deja apretado hasta 'release' o 'hold'
+        if not a.arg1:
+            print("Uso: joy <up|down|left|right|fire|release>[,..] [ms]", file=sys.stderr)
+            return 2
+        if a.arg1 == "release":
+            ruta = "/joy?release=1"
+        else:
+            ms = a.arg2 if a.arg2 is not None else "150"
+            ruta = f"/joy?press={a.arg1}&hold={ms}"
+        print(http(a.debug, ruta).decode(errors="replace").strip())
     elif a.accion == "runfile":
         # Compila y prueba en un paso: manda el binario y lo ejecuta por HTTP
         # (POST /run). No hace falta abrir el socket del UART ni esperar entre

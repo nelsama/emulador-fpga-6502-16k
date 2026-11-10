@@ -245,6 +245,7 @@ pantalla sin intervención humana**.
 | Ruta | Tipo | Contenido |
 |---|---|---|
 | **`POST /run?name=X.BIN&addr=0800`** | texto | **Reinicia, carga y ejecuta** (cuerpo = binario). Equivale al botón `RUN` |
+| **`/joy?press=left,fire&hold=200`** | texto | **Pulsa el joystick** (puerto 1) sin pasar por el UART. `release=1` suelta todo |
 | `/` | HTML | Índice con vista previa del vídeo (se refresca sola) + panel de estado en vivo |
 | `/screen.png` | PNG | **Último frame presentado** (320×240): lo que se vio de verdad |
 | `/screen.png?scale=2` | PNG | La misma captura ampliada ×2, ×3 o ×4 (útil para leer texto) |
@@ -1256,6 +1257,28 @@ El teclado del PC tiene **dos destinos**, y los elige un selector en el panel
 
 `F11`, `Alt+Intro` y `Esc` funcionan en los dos modos: nunca te quedas sin salir.
 
+#### El joystick por HTTP
+
+El puerto 1 también se maneja por HTTP, sin PuTTY ni mando. Es la vía cómoda
+para un agente, porque no compite con el UART del programa:
+
+```bash
+curl "http://localhost:8080/joy?press=left,fire&hold=200"
+curl "http://localhost:8080/joy?release=1"
+```
+
+Botones: `up`, `down`, `left`, `right`, `fire`, separados por comas. `hold` es
+la duración en ms (máx. 5000); **sin `hold` el botón queda apretado** hasta
+`release=1` o hasta el siguiente `press`.
+
+> **Se combina con la ventana.** Una pulsación por HTTP y otra del mando o del
+> teclado (`JOY`) se **suman**: vale cualquiera de las dos, no hay que elegir.
+>
+> **El programa debe leer el joystick.** Si no llamó a `joy_init()` (bits 3-7 de
+> `$C002` a entrada), la respuesta trae un `AVISO:` y el juego no reacciona.
+
+Detalles y ejemplos: [`GUIA-AGENTES.md`](GUIA-AGENTES.md#joy-mover-el-joystick-sin-pasar-por-el-uart).
+
 #### Escribir comandos sin PuTTY
 
 Con el selector en `UART`, el teclado de la ventana se comporta **como el cable**
@@ -1449,7 +1472,7 @@ crece o encoge con él para que la consola de 24 filas no se recorte nunca.
 > módulo. Antes crecía el módulo y la última fila de la consola — con el cursor —
 > quedaba por debajo del borde de la ventana.
 
-Equivalente por HTTP (ver [Herramientas de SD](#7-herramientas-de-sd)):
+Eqiuvalente por HTTP (ver [Herramientas de SD](#7-herramientas-de-sd)):
 `/sdcard/ls`, `/sdcard/write`, `/sdcard/delete`, `/sdcard/rename`.
 
 #### Terminal del UART en la ventana

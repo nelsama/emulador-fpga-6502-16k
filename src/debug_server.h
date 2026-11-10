@@ -61,6 +61,31 @@ public:
   // Saca el primero cuyo plazo ya venció. Devuelve false si no hay ninguno.
   bool tomar_comando_vencido(long long ahora, std::string* cmd);
 
+  // --- Joystick por HTTP ($C000, puerto 1) --------------------------------
+  //
+  // `GET/POST /joy?press=left,fire&hold=200` aprieta y suelta botones sin
+  // abrir PuTTY. El formato es el del puerto 1 (activo en bajo): aquí se expone
+  // con nombres para no tener que manejar máscaras desde un script.
+  //
+  // El estado vive aquí y NO se pisa: la ventana recibe el suyo por su lado y
+  // main.cpp combina los dos (una pulsación de cualquiera de los dos vale).
+  // Estado actual de los bits del joystick, con la lógica del puerto 1.
+  uint8_t joy_http() const { return joy_bits_; }
+  // Aplica una pulsación con duración: pasado `hasta` (ms) se suelta sola, para
+  // que un agente que se cae a medias no deje el botón apretado para siempre.
+  void pulsar_joy(uint8_t bits, long long hasta_ms) {
+    joy_bits_ = (uint8_t)(joy_bits_ & (uint8_t)~bits);  // 0 = pulsado
+    joy_soltar_ = hasta_ms;
+  }
+  void soltar_joy() {
+    joy_bits_ = 0xF8;
+    joy_soltar_ = 0;
+  }
+  // Suelta las pulsaciones cuyo plazo venció. Lo llama el bucle principal.
+  void tick_joy(long long ahora_ms) {
+    if (joy_soltar_ && ahora_ms >= joy_soltar_) soltar_joy();
+  }
+
 private:
   struct Conn;
   struct Response {
@@ -97,4 +122,6 @@ private:
   Response resp_;
   std::vector<std::unique_ptr<Conn>> conns_;
   std::vector<ComandoDiferido> diferidos_;  // ver programar_comando()
+  uint8_t joy_bits_ = 0xF8;   // puerto 1 vía HTTP (activo en bajo)
+  long long joy_soltar_ = 0;  // instante en que se sueltan las pulsaciones
 };

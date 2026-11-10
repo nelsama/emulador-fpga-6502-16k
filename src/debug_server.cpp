@@ -10,6 +10,7 @@
 #include "bus.h"
 #include "cpu_6502.h"
 #include "debug_dump.h"
+#include "gpio_uart.h"
 #include "sd_card.h"
 #include "spi_sd.h"
 #include "uart.h"
@@ -736,6 +737,114 @@ void DebugServer::build_response(Conn& /*c*/, const std::string& head) {
                  "para verlo: /console.txt o /screen.png" + NL;
     std::printf("HTTP /run: %s en %s\n", nombre.c_str(), dir_txt);
 
+  } else if (path == "/joy") {
+    // Joystick Atari del puerto 1, sin pasar por el UART.
+    //
+    //   GET  /joy?press=left,fire&hold=200   aprieta esos botones 200 ms
+    //   GET  /joy?press=up                   deja apretado hasta que se suelte
+    //   GET  /joy?release=1                  suelta todo
+    //   POST /joy?press=...                  igual que GET
+    //
+    // Botones: up, down, left, right, fire. Se combinan con lo que haga el
+    // teclado o el mando en la ventana: vale cualquiera de los dos.
+    //
+    // `hold` es la red de seguridad para un agente: si el script se corta a
+    // medias, el botón se suelta solo al vencer el plazo (máx. 5000 ms). Sin
+    // `hold` el botón queda apretado hasta `release=1` o el siguiente `press`.
+    if (!bus_->gpio()) {
+      resp_.status = "503 Service Unavailable";
+      resp_.body = "sin GPIO" + NL;
+    } else {
+      auto param = [&](const char* clave) -> std::string {
+        const std::string k = std::string(clave) + "=";
+        const size_t p = query.find(k);
+        if (p == std::string::npos) return std::string();
+        const size_t ini = p + k.size();
+        const size_t fin = query.find('&', ini);
+        return query.substr(ini, fin == std::string::npos ? std::string::npos
+                                                         : fin - ini);
+      };
+
+      const bool release = query.find("release") != std::string::npos;
+      const std::string press = param("press");
+
+      std::string aplicados;
+      if (release) {
+        soltar_joy();
+        aplicados = "(soltado todo)";
+      } else if (press.empty() && query.find("press") == std::string::npos) {
+        resp_.status = "400 Bad Request";
+        resp_.body =
+            "uso: /joy?press=up,down,left,right,fire[&hold=ms] o /joy?release=1" + NL;
+        return;
+      } else {
+        // Decodificar la lista separada por comas.
+        uint8_t bits = 0;
+        std::string nombre;
+        auto aplicar = [&](const std::string& n) {
+          if (n == "up") bits |= Gpio::JOY_UP;
+          else if (n == "down") bits |= Gpio::JOY_DOWN;
+          else if (n == "left") bits |= Gpio::JOY_LEFT;
+          else if (n == "right") bits |= Gpio::JOY_RIGHT;
+          else if (n == "fire" || n == "a" || n == "space") bits |= Gpio::JOY_FIRE;
+          else if (!n.empty() && n != "none") {
+            resp_.status = "400 Bad Request";
+            resp_.body = "boton desconocido: '" + n +
+                         "' (up, down, left, right, fire)" + NL;
+            return false;
+          }
+          return true;
+        };
+        for (char ch : press) {
+          if (ch == ',') {
+            if (!aplicar(nombre)) return;
+            nombre.clear();
+          } else if (ch != ' ') {
+            nombre.push_back(ch);
+          }
+        }
+        if (!aplicar(nombre)) return;
+
+        long long hold = 0;
+        try {
+          hold = std::stoll(param("hold"));
+        } catch (...) {
+          hold = 0;
+        }
+        if (hold < 0) hold = 0;
+        if (hold > 5000) hold = 5000;
+
+        pulsar_joy(bits, hold > 0 ? now_ms() + hold : 0);
+        aplicados = press.empty() ? "(nada)" : press;
+        if (hold > 0) aplicados += " durante " + std::to_string(hold) + " ms";
+      }
+
+      // Se informa del estado que puso ESTA petición, no del puerto ya
+      // combinado: la combinación con la ventana la aplica el bucle principal
+      // en la vuelta siguiente, así que leer port1_read() aquí siempre vería el
+      // valor viejo.
+      const uint8_t pines = joy_http();
+      resp_.body = "OK: joy " + aplicados + NL;
+      resp_.body += "joy HTTP = $";
+      char hex[8];
+      std::snprintf(hex, sizeof hex, "%02X", pines);
+      resp_.body += hex;
+      resp_.body += " (activo en bajo; $F8 = sin pulsar)" + NL;
+      resp_.body += "pulsado: ";
+      if ((pines & Gpio::JOY_UP) == 0) resp_.body += "up ";
+      if ((pines & Gpio::JOY_DOWN) == 0) resp_.body += "down ";
+      if ((pines & Gpio::JOY_LEFT) == 0) resp_.body += "left ";
+      if ((pines & Gpio::JOY_RIGHT) == 0) resp_.body += "right ";
+      if ((pines & Gpio::JOY_FIRE) == 0) resp_.body += "fire ";
+      if (pines == Gpio::JOY_IDLE) resp_.body += "(ninguno)";
+      resp_.body += NL;
+      if ((bus_->gpio()->dir1() & Gpio::JOY_MASK) != Gpio::JOY_MASK) {
+        resp_.body +=
+            "AVISO: los bits 3-7 del puerto 1 no estan como entrada, asi que el\n"
+            "       programa aun no hace joy_init() y no leera el joystick" + NL;
+      }
+    }
+
   } else if (path == "/uart") {
     // Inyecta texto en el UART como si llegara de PuTTY.
     //
@@ -907,7 +1016,8 @@ void DebugServer::build_response(Conn& /*c*/, const std::string& head) {
         "  /vram.json       tilemap + atributos + OAM en JSON\n"
         "  /state.txt       LEDs, SID, CPU, estado\n"
         "  /ram.bin?start=0&len=16384  volcado de RAM\n"
-        "  /run?name=X.BIN&addr=0800  resetea, carga y ejecuta (cuerpo = binario)\n";
+        "  /run?name=X.BIN&addr=0800  resetea, carga y ejecuta (cuerpo = binario)\n"
+        "  /joy?press=left,fire&hold=200  pulsa el joystick (release=1 suelta)\n";
   }
 }
 

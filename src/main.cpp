@@ -737,7 +737,14 @@ int main(int argc, char** argv) {
 
     if (window.active()) {
       if (!window.poll()) break; // el usuario cerro la ventana
-      bus.gpio()->set_joy(window.joy());
+
+      // Joystick: se combinan la ventana (teclado/mando) y la API HTTP. Los
+      // bits son activos en bajo, asi que combinar es un AND: el boton queda
+      // pulsado si lo aprieta cualquiera de los dos. El estado de la ventana
+      // se recalcula en cada vuelta y pisaria al de la API si se escribiera
+      // tal cual, de ahi la combinacion.
+      debug.tick_joy(DebugServer::ms_ahora());
+      bus.gpio()->set_joy((uint8_t)(window.joy() & debug.joy_http()));
 
       // Dibujar a ~60 Hz (el vídeo es de 320x240; no hace falta más).
       const auto ahora = clock::now();

@@ -173,6 +173,7 @@ debería cerrar con `shutdown(SHUT_WR)`.
 | Endpoint | Para qué |
 |---|---|
 | **`POST /run?name=X.BIN&addr=0800`** | **Reinicia, carga y ejecuta en un paso** (cuerpo = binario). Es el equivalente del botón RUN |
+| **`/joy?press=left,fire&hold=200`** | **Pulsa el joystick** sin tocar el UART. `release=1` suelta todo |
 | `/console.txt` | **Lo más útil** para programas de texto: la pantalla de 80×24 en texto plano |
 | `/console.png` | Captura de la consola con colores (640×384), `?scale=2..4` |
 | `/sdcard/ls` | Archivos de la SD y espacio libre |
@@ -222,6 +223,51 @@ curl "http://localhost:8080/run?name=TETRIS.BIN"
 > **La dirección importa**: `0800` para los juegos, `2700` para el SID player.
 > Cargar en la dirección equivocada no da error; el programa ejecuta basura.
 
+### `/joy`: mover el joystick sin pasar por el UART
+
+El puerto 1 (joystick Atari) se puede manejar por HTTP. Es la vía cómoda para
+un agente: no compite con el UART del programa, y el estado del botón dura un
+tiempo acotado.
+
+```bash
+curl "http://localhost:8080/joy?press=left,fire&hold=200"
+curl "http://localhost:8080/joy?release=1"
+```
+
+| Parámetro | Valor |
+|---|---|
+| `press` | `up`, `down`, `left`, `right`, `fire` (separados por coma). `none` = ninguno |
+| `hold` | ms que dura la pulsación (máx. 5000). **Sin `hold`, el botón queda apretado** hasta `release=1` o el siguiente `press` |
+| `release` | `1` suelta todos los botones |
+
+La respuesta dice cómo quedó el puerto:
+
+```
+OK: joy left,fire durante 200 ms
+joy HTTP = $68 (activo en bajo; $F8 = sin pulsar)
+pulsado: left fire
+```
+
+> **Se combina con la ventana.** Si en el emulador hay un mando o el teclado en
+> modo `JOY`, la pulsación por HTTP y la de la ventana se **suman**: vale
+> cualquiera de las dos. No hay que elegir.
+>
+> **El programa tiene que leer el joystick.** Si no llamó a `joy_init()` (los
+> bits 3-7 de `$C002` a entrada), la respuesta lo avisa con un `AVISO:` y el
+> juego no reaccionará. Se comprueba también en `/state.txt` → `dir1`.
+>
+> **`hold` es una red de seguridad.** Un agente que mande `press=left` y se corte
+> a medias dejaría la nave pegada a la izquierda; con `hold` el botón se suelta
+> solo.
+
+Con `emu_agent.py`:
+
+```bash
+python tools/emu_agent.py joy fire            # 150 ms
+python tools/emu_agent.py joy left,fire 800
+python tools/emu_agent.py joy release
+```
+
 ### `/state.txt`: distinguir "calcula" de "colgado"
 
 La sección `CPU:` es lo primero del volcado, porque es lo que se mira al
@@ -257,6 +303,10 @@ curl "http://localhost:8080/sdcard/ls"
 
 # Compilar y probar en un paso (reinicia, carga y ejecuta):
 curl --data-binary @JUEGO.BIN "http://localhost:8080/run?name=JUEGO.BIN&addr=0800"
+
+# Jugar sin teclado ni mando: pulsar izquierda + disparo 200 ms
+curl "http://localhost:8080/joy?press=left,fire&hold=200"
+curl "http://localhost:8080/joy?release=1"
 curl "http://localhost:8080/sdcard/rename?name=JUEGO.BIN&to=JUEGO2.BIN"
 curl "http://localhost:8080/sdcard/delete?name=JUEGO2.BIN"
 
