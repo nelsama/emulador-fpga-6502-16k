@@ -277,6 +277,10 @@ bool DebugServer::step(Conn& c) {
       // Lo usa /sdcard/write para inyectar binarios.
       {
         const std::string cab = c.in.substr(0, end);
+        // El cuerpo se vacía SIEMPRE: si no, una petición que no sea POST
+        // (por ejemplo GET /run) reutilizaría los bytes de la petición
+        // anterior y los escribiría en la SD con el nombre pedido.
+        cuerpo_peticion_.clear();
         if (cab.compare(0, 5, "POST ") == 0) {
           size_t len = 0;
           const size_t p = cab.find("Content-Length:");
