@@ -1825,7 +1825,7 @@ docs/
   PUTTY-SETUP.md       configuración del terminal
   img/                 capturas
 
-rom/monitor.bin        ROM del monitor v2.7.0 (16 KB)
+rom/monitor.bin        ROM del monitor v2.8.0 (16 KB)
 tarjeta.img            imagen MicroFS de 16 MB
 
 run.sh / run.bat       lanzadores
