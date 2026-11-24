@@ -44,7 +44,7 @@ Y abre en el navegador **<http://localhost:8080>** para ver el vídeo en vivo.
 | Componente | Estado | Notas |
 |---|---|---|
 | CPU 6502 | ✅ | 151 opcodes, ciclos reales por instrucción |
-| RAM 16 KB + ROM 16 KB | ✅ | monitor v2.6.4, vectores mapeados |
+| RAM 32 KB + ROM 16 KB | ✅ | monitor v2.7.0, vectores mapeados |
 | UART | ✅ | fiel a `uart.vhd`, entrega a ritmo serial |
 | SD / SPI | ✅ | protocolo SD completo, formato MicroFS |
 | Timer / RTC | ✅ | contadores con latch, 6.75 MHz |
@@ -99,7 +99,7 @@ python tools/emu_agent.py stop
 | `/console.txt` | **Pantalla de la consola (80×24)** tal como la interpreta el terminal |
 | `/console.png` | Captura de la consola (640×384) con colores ANSI y glifos CP437 |
 | `/state.txt` | GPIO (joystick, LEDs), vídeo, SID y UART |
-| `/ram.bin` | Los 16 KB de RAM (`?start=&len=` para un trozo) |
+| `/ram.bin` | Los 32 KB de RAM (`?start=&len=` para un trozo) |
 
 Permite inspeccionar lo que genera tu programa **sin capturas manuales**, también
 desde un agente de IA o un test automático:

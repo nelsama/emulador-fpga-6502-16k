@@ -45,21 +45,28 @@ public:
   // en curso: el que escribe fuera espera a que baje.
   bool ocupada() const { return sd_selected(); }
 
-  void reset() {
-    ss_mask_ = cs_enable_ = control_ = 0;
-    status_ = 0x30;
-    if (sd_) sd_->deselect();
-  }
+  // Avanza la transferencia en curso.
+  void tick(uint32_t cpu_cycles);
+
+  // Botón de reset de la placa.
+  void reset();
 
   // ¿Está CS0 (SD) activo?
   bool sd_selected() const { return cs_enable_ && (ss_mask_ & 0x01); }
 
 private:
+  uint8_t status() const;
+
   uint8_t rx_data_ = 0;
   uint8_t tx_data_ = 0;
-  uint8_t status_  = 0x30; // TRDY(5)=0x20 + TMT(4)=0x10: listo para transmitir
-  uint8_t control_ = 0;
+  uint8_t sh_tx_ = 0;     // byte que se está enviando
+  uint8_t control_ = 0;   // 4 bits sin efecto
   uint8_t ss_mask_ = 0;
   uint8_t cs_enable_ = 0;
+  // Estado de spi_master.vhd. ROE y TOE no se borran hasta el reset.
+  int  cnt_ = 0;          // 0 = reposo, 1-3 = espera, 4-23 = transferencia
+  bool pend_ = false;
+  bool trdy_ = true, tmt_ = true;
+  bool rrdy_ = false, toe_ = false, roe_ = false;
   SdCard* sd_ = nullptr;
 };

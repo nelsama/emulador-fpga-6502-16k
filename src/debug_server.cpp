@@ -11,6 +11,7 @@
 #include "cpu_6502.h"
 #include "debug_dump.h"
 #include "gpio_uart.h"
+#include "ram_rom.h"
 #include "sd_card.h"
 #include "spi_sd.h"
 #include "uart.h"
@@ -671,7 +672,7 @@ void DebugServer::build_response(Conn& /*c*/, const std::string& head) {
     std::string dir = param("addr");
     if (dir.empty()) dir = "0800";
 
-    // Dirección: hexa de 1 a 4 dígitos dentro de la RAM ($0000-$3FFF).
+    // Dirección: hexa de 1 a 4 dígitos dentro de la RAM ($0000-$7FFF).
     bool ok_dir = !dir.empty() && dir.size() <= 4;
     unsigned dirv = 0;
     for (char ch : dir) {
@@ -682,9 +683,9 @@ void DebugServer::build_response(Conn& /*c*/, const std::string& head) {
       else { ok_dir = false; break; }
       dirv = dirv * 16u + (unsigned)d;
     }
-    if (!ok_dir || dirv > 0x3FFF) {
+    if (!ok_dir || dirv >= RamRom::RAM_BYTES) {
       resp_.status = "400 Bad Request";
-      resp_.body = "direccion invalida: tiene que ser hexa de 0000 a 3FFF" + NL;
+      resp_.body = "direccion invalida: tiene que ser hexa de 0000 a 7FFF" + NL;
       return;
     }
     char dir_txt[8];
@@ -1033,10 +1034,10 @@ void DebugServer::build_response(Conn& /*c*/, const std::string& head) {
     debug_dump::dump_state_txt_mem(*bus_, cpu_, resp_.body);
 
   } else if (path == "/ram.bin") {
-    // Volcado de los 16 KB de RAM (formato binario: pantalla cruda).
+    // Volcado de los 32 KB de RAM (formato binario: pantalla cruda).
     const size_t start = query.find("start=");
     const size_t len_q = query.find("len=");
-    unsigned a = 0, l = 16384;
+    unsigned a = 0, l = RamRom::RAM_BYTES;
     if (start != std::string::npos) a = (unsigned)strtoul(query.c_str() + start + 6, nullptr, 0);
     if (len_q != std::string::npos) l = (unsigned)strtoul(query.c_str() + len_q + 4, nullptr, 0);
     resp_.type = "application/octet-stream";
@@ -1070,7 +1071,7 @@ void DebugServer::build_response(Conn& /*c*/, const std::string& head) {
         "  /vram.txt        tilemap + atributos + OAM en texto\n"
         "  /vram.json       tilemap + atributos + OAM en JSON\n"
         "  /state.txt       LEDs, SID, CPU, estado\n"
-        "  /ram.bin?start=0&len=16384  volcado de RAM\n"
+        "  /ram.bin?start=0&len=32768  volcado de RAM\n"
         "  /run?name=X.BIN&addr=0800  resetea, carga y ejecuta (cuerpo = binario)\n"
         "  /joy?press=left,fire&hold=200  pulsa el joystick (release=1 suelta)\n"
         "  /btn?press=a,b&hold=200  pulsa BTN_A/BTN_B de $C005 (release=1 suelta)\n";

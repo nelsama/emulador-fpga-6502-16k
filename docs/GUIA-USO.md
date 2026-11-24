@@ -263,7 +263,7 @@ pantalla sin intervención humana**.
 | `/vram.txt` | texto | Tilemap, atributos y OAM en hexadecimal + vista ASCII 40×30 |
 | `/vram.json` | JSON | Lo mismo que `/vram.txt` pero estructurado, para procesarlo con código |
 | `/state.txt` | texto | CPU/UART, LEDs, Core de Vídeo y registros del SID |
-| `/ram.bin` | binario | Los 16 KB de RAM tal cual |
+| `/ram.bin` | binario | Los 32 KB de RAM tal cual |
 | `/ram.bin?start=512&len=256` | binario | Un trozo concreto de la RAM |
 
 ### Ejemplos
@@ -707,7 +707,7 @@ nombre de 12. Caben **15 archivos** de hasta **65535 bytes**.
 
 | Rango | Uso |
 |---|---|
-| `$0000-$3FFF` | RAM 16 KB (stack en `$3E00-$3FFF`) |
+| `$0000-$7FFF` | RAM 32 KB (en la placa, 2 KB de BSRAM y 30 KB de PSRAM, sin wait-states). El reset no la borra |
 | `$8000-$BFFF` | ROM del monitor 16 KB |
 | `$FFFA-$FFFF` | Vectores NMI/RESET/IRQ (mapeados dentro de la ROM) |
 | `$C000-$C005` | GPIO: puerto 1 (joystick), puerto 2 (6 LEDs), configs, flag de usuario y pulsadores |
@@ -850,6 +850,9 @@ La transmisión también tarda **~87 µs por byte**: mientras tanto `TX_READY` =
 CPU lea (tope de 64 KB), así que no se pierde como en un cable real.
 
 ### SD / SPI
+
+El SPI replica `spi_master.vhd`: ~11 ciclos de CPU por byte, cola de 1 byte, `RRDY` se
+borra al leer `$C040` y los errores `ROE`/`TOE` se quedan hasta el reset. No genera IRQ.
 
 Protocolo SD completo: CMD0/8/55/41/58/17/24, formato **MicroFS** y persistencia
 sector a sector. El fichero de imagen se mantiene **abierto entre escrituras**
@@ -1458,8 +1461,8 @@ listado de la tarjeta y sus acciones. Todo es **clicable con el ratón**:
 > (RAM y periféricos vuelven al arranque); lo que haya en la SD, no. Es lo que se
 > quiere al probar un programa, pero no sirve para "cargar encima" de otro.
 >
-> **La dirección** se valida: hexa de 1 a 4 dígitos, y **`0000`-`3FFF`**, que es
-> la RAM de 16 KB. Fuera de ese rango el emulador lo rechaza y lo dice por la
+> **La dirección** se valida: hexa de 1 a 4 dígitos, y **`0000`-`7FFF`**, que es
+> la RAM de 32 KB. Fuera de ese rango el emulador lo rechaza y lo dice por la
 > consola de diagnóstico, sin tocar la máquina.
 
 > **El monitor cachea el listado.** Los cambios en la imagen son inmediatos,
@@ -1780,7 +1783,7 @@ src/
   cpu_6502.h/.cpp      CPU 6502, 151 opcodes
   cpu_cycles.h         tabla de ciclos por opcode
   bus.h/.cpp           mux de dispositivos + IRQ combinada
-  ram_rom.h/.cpp       RAM 16 KB + ROM 16 KB + vectores
+  ram_rom.h/.cpp       RAM 32 KB + ROM 16 KB + vectores
   uart.h/.cpp          UART $C020-$C023 (FIFO, entrega a ritmo serial)
   spi_sd.h/.cpp        bridge SPI $C040-$C047
   sd_card.h/.cpp       tarjeta SD + MicroFS
@@ -1822,7 +1825,7 @@ docs/
   PUTTY-SETUP.md       configuración del terminal
   img/                 capturas
 
-rom/monitor.bin        ROM del monitor v2.6.4 (16 KB)
+rom/monitor.bin        ROM del monitor v2.7.0 (16 KB)
 tarjeta.img            imagen MicroFS de 16 MB
 
 run.sh / run.bat       lanzadores

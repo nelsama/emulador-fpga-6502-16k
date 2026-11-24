@@ -55,7 +55,7 @@ bool dump_state_txt(const std::string& path, Bus& bus, const Cpu6502* cpu);
 
 // --- Memoria ---------------------------------------------------------------
 
-// Copia `len` bytes de RAM a partir de `start` (direcciones de CPU $0000-$3FFF).
+// Copia `len` bytes de RAM a partir de `start` (direcciones de CPU $0000-$7FFF).
 void dump_ram_bin_mem(Bus& bus, unsigned start, unsigned len, std::string& out);
 
 } // namespace debug_dump

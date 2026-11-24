@@ -358,7 +358,7 @@ int main(int argc, char** argv) {
       const std::string dir = arg.substr(nl + 1);
       if (nombre.empty()) return;
 
-      // Validar la dirección: hexa de 1 a 4 dígitos, dentro de la RAM ($0000-$3FFF).
+      // Validar la dirección: hexa de 1 a 4 dígitos, dentro de la RAM ($0000-$7FFF).
       // El monitor escribe en RAM, asi que fuera de ese rango no tiene sentido.
       bool ok_dir = !dir.empty() && dir.size() <= 4;
       unsigned dirv = 0;
@@ -370,9 +370,9 @@ int main(int argc, char** argv) {
         else { ok_dir = false; break; }
         dirv = dirv * 16u + (unsigned)d;
       }
-      if (!ok_dir || dirv > 0x3FFF) {
+      if (!ok_dir || dirv >= RamRom::RAM_BYTES) {
         std::fprintf(stderr,
-                     "SD: direccion '%s' invalida (hexa de 0000 a 3FFF)\n",
+                     "SD: direccion '%s' invalida (hexa de 0000 a 7FFF)\n",
                      dir.c_str());
         return;
       }

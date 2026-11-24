@@ -11,7 +11,7 @@
 // una dirección y este bus decide qué dispositivo responde.
 //
 // Mapa de memoria (coincide con Data_bus_mux.vhd):
-//   $0000-$3FFF  RAM 16 KB
+//   $0000-$7FFF  RAM 32 KB
 //   $8000-$BFFF  ROM 16 KB
 //   $C000-$C0FF  GPIO + I2C + UART + Timer + SPI
 //   $D400-$D41F  SID 6581

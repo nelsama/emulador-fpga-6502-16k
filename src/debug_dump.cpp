@@ -513,8 +513,8 @@ void dump_ram_bin_mem(Bus& bus, unsigned start, unsigned len, std::string& out) 
   out.clear();
   RamRom* r = bus.ram_rom();
   if (!r) return;
-  if (start >= 16384) return;
-  if (len > 16384 - start) len = 16384 - start;
+  if (start >= RamRom::RAM_BYTES) return;
+  if (len > RamRom::RAM_BYTES - start) len = RamRom::RAM_BYTES - start;
   out.assign((const char*)r->ram() + start, len);
 }
 

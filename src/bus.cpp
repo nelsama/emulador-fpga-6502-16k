@@ -68,6 +68,7 @@ bool Bus::irq_asserted() const { return uart_->irq() || timer_->irq(); }
 void Bus::tick(uint32_t cpu_cycles) {
   uart_->tick(cpu_cycles);
   timer_->tick(cpu_cycles);
+  spi_->tick(cpu_cycles);
   sid_->tick(cpu_cycles);
   video_->tick_cpu(cpu_cycles);
 }

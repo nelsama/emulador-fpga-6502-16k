@@ -19,7 +19,7 @@ class Bus;
 //   GET /vram.txt         tilemap + atributos + OAM en texto
 //   GET /vram.json        tilemap + atributos + OAM en JSON
 //   GET /state.txt        CPU, LEDs, SID, estado del vídeo
-//   GET /ram.bin         16 KB de RAM (&start=&len= para trozos)
+//   GET /ram.bin         32 KB de RAM (&start=&len= para trozos)
 //
 // Arranca SIEMPRE con el emulador en el puerto 8080. Para cambiarlo:
 //   emulador.exe rom.bin 4000 tarjeta.img --debug-http=8081

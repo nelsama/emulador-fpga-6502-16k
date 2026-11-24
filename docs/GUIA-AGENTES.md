@@ -209,7 +209,7 @@ Responde en milisegundos (no espera al monitor); el resultado se mira en
 | Parámetro | Por defecto | Nota |
 |---|---|---|
 | `name` | — | nombre 8.3 en la SD. Sin cuerpo POST, ejecuta uno que ya esté |
-| `addr` | `0800` | hexa 4 dígitos, `0000`-`3FFF` |
+| `addr` | `0800` | hexa 4 dígitos, `0000`-`7FFF` |
 
 Sin cuerpo POST también funciona, para relanzar lo que ya está en la tarjeta:
 

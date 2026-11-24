@@ -219,6 +219,49 @@ static void test_sd() {
   std::remove(img);
 }
 
+static void test_ram() {
+  Maquina k({0xEA});
+  Bus& b = k.bus;
+  for (int a : {0x3FFF, 0x4000, 0x7FFF}) {
+    check(b.read((uint16_t)a) == 0, "ram: arranca a 0");
+    b.write((uint16_t)a, (uint8_t)(a >> 8 ^ 0x5A));
+  }
+  check(b.read(0x3FFF) == 0x65 && b.read(0x4000) == 0x1A && b.read(0x7FFF) == 0x25,
+        "ram: 32 KB sin solaparse");
+  b.reset_placa();
+  check(b.read(0x7FFF) == 0x25, "ram: el reset no la borra");
+  b.write(0x8000, 0x12);
+  check(b.read(0x8000) == 0xEA, "ram: $8000 sigue siendo ROM");
+}
+
+static void test_spi() {
+  bool r;
+  SpiSd s;
+  auto st = [&] { return s.read(0xC042, r); };
+  check(st() == 0x30, "spi: en reposo TRDY y TMT");
+  s.write(0xC041, 0xAA, r);
+  check(!(st() & 0x20), "spi: TRDY a 0 con un byte en cola");
+  s.tick(2); // 4 pulsos: cnt pasa por 1, 2, 3 y carga
+  check((st() & 0x30) == 0x20, "spi: tras la carga la cola queda libre y TMT a 0");
+  s.tick(8);
+  check(!(st() & 0x40), "spi: a los 10 ciclos aun no hay byte");
+  s.tick(1);
+  check(st() & 0x40, "spi: RRDY a los 11 ciclos");
+  check(s.read(0xC040, r) == 0xFF && !(st() & 0x40), "spi: leer RX borra RRDY (MISO a 1)");
+  check(s.read(0xC041, r) == 0xAA, "spi: TX se puede releer");
+  s.tick(10);
+  s.write(0xC041, 1, r); s.tick(20); s.write(0xC041, 2, r); s.tick(20);
+  check((st() & 0xC4) == 0xC4, "spi: ROE si no se lee a tiempo");
+  s.write(0xC041, 3, r); s.write(0xC041, 4, r);
+  check((st() & 0x88) == 0x88, "spi: TOE al escribir con la cola llena");
+  s.tick(40); s.read(0xC040, r);
+  check((st() & 0x0C) == 0x0C, "spi: ROE y TOE no se borran solos");
+  s.write(0xC043, 0xFF, r);
+  check(s.read(0xC043, r) == 0x0F && s.read(0xC046, r) == 0, "spi: CONTROL de 4 bits");
+  s.reset();
+  check(st() == 0x30, "spi: el reset borra los errores");
+}
+
 static void test_reset_placa() {
   Maquina k({0xEA});
   Bus& b = k.bus;
@@ -250,6 +293,8 @@ int main() {
   test_timer_irq();
   test_uart();
   test_sd();
+  test_ram();
+  test_spi();
   test_reset_placa();
   test_sid_muestras();
   std::printf(fallos ? "test_perif: %d FALLOS\n" : "test_perif: OK\n", fallos);

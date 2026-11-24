@@ -7,21 +7,21 @@ RamRom::RamRom() {
 }
 
 bool RamRom::decodes(uint16_t addr) const {
-  if (addr < 0x4000) return true;            // RAM
+  if (addr < RAM_BYTES) return true;            // RAM
   if (addr >= 0x8000 && addr < 0xC000) return true; // ROM
   return false;
 }
 
 uint8_t RamRom::read(uint16_t addr, bool& resp) {
   resp = true;
-  if (addr < 0x4000) return ram_[addr];
+  if (addr < RAM_BYTES) return ram_[addr];
   if (addr >= 0x8000 && addr < 0xC000) return rom_[addr - 0x8000];
   resp = false;
   return 0;
 }
 
 void RamRom::write(uint16_t addr, uint8_t data, bool& resp) {
-  if (addr < 0x4000) {
+  if (addr < RAM_BYTES) {
     ram_[addr] = data;
     resp = true;
     return;

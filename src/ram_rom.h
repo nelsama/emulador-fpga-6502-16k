@@ -6,9 +6,12 @@
 
 #include "device.h"
 
-// RAM 16 KB ($0000-$3FFF) y ROM 16 KB ($8000-$BFFF) + vectores.
+// RAM 32 KB ($0000-$7FFF: 2 KB de BSRAM y 30 KB de PSRAM, sin diferencias para
+// el programa) y ROM 16 KB ($8000-$BFFF) + vectores.
 class RamRom : public Device {
 public:
+  static constexpr unsigned RAM_BYTES = 0x8000;
+
   RamRom();
 
   bool decodes(uint16_t addr) const override;
@@ -23,6 +26,6 @@ public:
   uint8_t* ram() { return ram_.data(); }
 
 private:
-  std::array<uint8_t, 16384> ram_{};
+  std::array<uint8_t, RAM_BYTES> ram_{};
   std::array<uint8_t, 16384> rom_{};
 };
