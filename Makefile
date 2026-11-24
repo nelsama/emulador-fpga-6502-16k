@@ -53,7 +53,7 @@ OBJS := $(patsubst %.cpp,%.o,$(patsubst %.cc,%.o,$(SRCS)))
 DEPS := $(OBJS:.o=.d)
 BIN  := emulador.exe
 
-.PHONY: all run test clean rebuild info dist
+.PHONY: all run test cosim clean rebuild info dist
 
 all: $(BIN)
 
@@ -123,13 +123,25 @@ run: $(BIN)
 	./$(BIN) rom/monitor.bin 4000 tarjeta.img
 
 # Pruebas rápidas (no necesitan SDL ni abrir ventana).
-test: test_terminal.exe test_gpio_flag.exe test_video.exe test_sd_nombre.exe test_tcp_puerto.exe test_run.exe
+test: test_terminal.exe test_gpio_flag.exe test_video.exe test_sd_nombre.exe test_tcp_puerto.exe test_run.exe test_perif.exe
 	./test_terminal.exe
 	./test_gpio_flag.exe
 	./test_video.exe
 	./test_sd_nombre.exe
 	./test_tcp_puerto.exe
 	./test_run.exe
+	./test_perif.exe
+
+PERIF_SRCS := src/cpu_6502.cpp src/bus.cpp src/ram_rom.cpp src/gpio_uart.cpp src/uart.cpp src/timer.cpp \
+  src/spi_sd.cpp src/sd_card.cpp src/sid.cpp src/video/video.cpp src/terminal/terminal_state.cpp
+
+# CPU, timer, UART, SD y reset de la placa. Enlaza los objetos del emulador.
+test_perif.exe: tools/test_perif.cpp $(PERIF_SRCS:.cpp=.o) $(patsubst %.cpp,%.o,$(patsubst %.cc,%.o,$(RESIDFP_SRCS)))
+	$(CXX) -std=c++17 -O2 -Wall -Isrc -o $@ $^
+
+# Compara la CPU con cpu65xx_fast.vhd (necesita GHDL). Ej.: make cosim RONDAS=30
+cosim:
+	bash tools/cosim_cpu/run.sh $(or $(RONDAS),5)
 
 test_run.exe: tools/test_run.cpp src/sd_card.cpp src/sd_card.h
 	$(CXX) -std=c++17 -O2 -Wall -Isrc -o $@ tools/test_run.cpp src/sd_card.cpp
@@ -154,7 +166,7 @@ info:
 	@echo "SDL2_PREFIX: $(SDL2_PREFIX)"
 
 clean:
-	rm -f $(OBJS) $(DEPS) $(BIN) test_terminal.exe test_gpio_flag.exe test_video.exe test_sd_nombre.exe test_tcp_puerto.exe
+	rm -f $(OBJS) $(DEPS) $(BIN) test_terminal.exe test_gpio_flag.exe test_video.exe test_sd_nombre.exe test_tcp_puerto.exe test_run.exe test_perif.exe
 	rm -rf $(DIST)
 
 rebuild: clean all

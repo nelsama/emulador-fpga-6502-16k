@@ -45,6 +45,12 @@ public:
   // en curso: el que escribe fuera espera a que baje.
   bool ocupada() const { return sd_selected(); }
 
+  void reset() {
+    ss_mask_ = cs_enable_ = control_ = 0;
+    status_ = 0x30;
+    if (sd_) sd_->deselect();
+  }
+
   // ¿Está CS0 (SD) activo?
   bool sd_selected() const { return cs_enable_ && (ss_mask_ & 0x01); }
 

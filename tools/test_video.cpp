@@ -95,13 +95,16 @@ static void test_patrones_demo() {
   // $D816 solo dispara: BUSY=1 y la escritura siguiente del CPU se IGNORA,
   // como en el hardware (init_done='0').
   v.write(0xD816, 1, resp);
+  check((v.read(0xD803, resp) & 0x10) == 0, "setup: VIDEO_READY a 0 durante BUSY");
   check(v.read(0xD817, resp) == 0x01, "setup: BUSY activo tras $D816");
   v.write(0xD800, 0x07, resp);
   v.write(0xD801, 0x00, resp);
   v.write(0xD802, 0x99, resp);
-  check(v.tilemap()[7] == 0x00, "setup: escritura durante BUSY se ignora");
+  check(v.tilemap()[7] == 0x20, "setup: escritura durante BUSY se ignora");
 
   // Al terminar el BUSY (tick_frame) se aplica: todo a cero.
+  for (int i = 0; i < Video::SETUP_LINEAS - 1; i++) v.tick_frame();
+  check(v.read(0xD817, resp) == 0x01, "setup: BUSY dura ~184 us");
   v.tick_frame();
   check(v.read(0xD817, resp) == 0x10, "setup: VIDEO_READY al terminar");
   check(v.tilemap()[5] == 0x00, "setup: tilemap a cero tras el setup");
@@ -429,11 +432,10 @@ static void test_scroll_vertical_ancho() {
   check(fc == fd, "scroll_y: 2047 y 255 dibujan lo mismo");
 }
 
-// El hardware resuelve el solapamiento con un LINE BUFFER de 8 entradas
-// (video_core.vhd, NSL = 8), no dibujando los sprites en orden:
-//   - gana el sprite de MENOR INDICE que cubre el píxel, y los demás no se
-//     pintan encima (si el elegido es transparente se ve el fondo, no el otro);
-//   - a partir del 9º sprite que cruza una línea, el resto no se dibuja.
+// El hardware resuelve el solapamiento con un LINE BUFFER de 12 entradas
+// (video_core.vhd, NSL = 12), no dibujando los sprites en orden:
+//   - gana el sprite OPACO de MENOR INDICE que cubre el píxel;
+//   - a partir del 13º sprite que cruza una línea, el resto no se dibuja.
 static void test_sprites_line_buffer() {
   Video v;
   bool resp = false;
@@ -487,21 +489,128 @@ static void test_sprites_line_buffer() {
   v.render(frame.data());
   check(frame[0] == solo_0,
         "sprites: uno transparente de índice mayor no borra al de índice menor");
+}
 
-  // Overflow: 9 sprites en la misma línea. El 9º (índice 8) no entra en el
-  // buffer de 8 y no se dibuja; además debe activarse OVERFLOW en $D803 bit 6.
-  limpiar_oam(v);
-  for (int i = 0; i < 9; i++) poner_sprite(v, i, 40 + i * 8, 0, 1, 0x00, 0x00);
-  v.render(frame.data());
-  const uint8_t st = v.read(0xD803, resp);
-  check((st & 0x40) != 0, "sprites: 9 en una línea activan OVERFLOW (bit 6)");
+// Avanza hasta la línea FÍSICA `linea` (0..524). El barrido arranca en 480.
+static void ir_a_linea(Video& v, int linea) {
+  entrar_en_blanking(v); // línea 480
+  for (int l = 480; l != linea; l = (l + 1) % Video::H_LINES) v.tick_frame();
+}
 
-  // Con 8 justos no hay overflow.
+// Casos 1-11 del manual del core (apéndice B.6).
+static void test_casos_manual() {
+  Video v;
+  bool resp = false;
+  std::vector<uint32_t> f((size_t)Video::W * Video::H, 0);
+  const uint32_t BG = 0xFF4488CC, C1 = 0xFFFF8800, C2 = 0xFF0000FF;
+  const uint32_t FONDO = 0xFF0000AA; // paleta 0, color 1
+  auto escribir = [&](int area, int d, int dato) {
+    v.write(0xD800, (uint8_t)d, resp);
+    v.write(0xD801, (uint8_t)(area | (d >> 8)), resp);
+    v.write(0xD802, (uint8_t)dato, resp);
+  };
+  // Patrón 1: color 1 entero. Patrón 2: solo la mitad izquierda. 3: vacío.
+  for (int fila = 0; fila < 8; fila++) {
+    escribir(0xC8, 8 + fila, 0xFF);  escribir(0xE8, 8 + fila, 0);
+    escribir(0xC8, 16 + fila, 0xF0); escribir(0xE8, 16 + fila, 0);
+    escribir(0x80, 8 + fila, 0xFF);  escribir(0xA0, 8 + fila, 0); // tile 1
+  }
+  auto px = [&](int x, int y) { return f[(size_t)y * Video::W + x]; };
+  auto pintar = [&] { v.render(f.data()); };
+  auto fila_de = [&](int n, int y) {
+    limpiar_oam(v);
+    for (int i = 0; i < n; i++) poner_sprite(v, i, i * 10, y, 1, 0, 0);
+  };
+  auto ovf = [&] { return (v.read(0xD803, resp) & 0x40) != 0; };
+  auto vistos = [&](int desde, int hasta, int n) {
+    for (int i = 0; i < n; i++)
+      if ((px(i * 10, 100) == C1) != (i >= desde && i <= hasta)) return false;
+    return true;
+  };
+
+  fila_de(13, 100); pintar();
+  check(vistos(0, 11, 13), "B.6-1: 13 en línea, se ven 0-11");
+  poner_sprite(v, 0, 0, 248, 1, 0, 0); pintar();
+  check(vistos(1, 12, 13), "B.6-2: Y=248 no ocupa hueco");
+  poner_sprite(v, 0, 400, 100, 1, 0x04, 0); pintar();
+  check(vistos(1, 11, 13), "B.6-3: fuera de pantalla en X ocupa hueco");
+
   limpiar_oam(v);
-  for (int i = 0; i < 8; i++) poner_sprite(v, i, 40 + i * 8, 0, 1, 0x00, 0x00);
-  v.render(frame.data());
-  const uint8_t st8 = v.read(0xD803, resp);
-  check((st8 & 0x40) == 0, "sprites: 8 en una línea no activan OVERFLOW");
+  poner_sprite(v, 0, 8, 8, 2, 0, 0);
+  poner_sprite(v, 1, 8, 8, 1, 1, 0); pintar();
+  check(px(8, 8) == C1 && px(15, 8) == C2, "B.6-4: transparencia entre sprites");
+  poner_sprite(v, 1, 8, 8, 3, 1, 0); pintar();
+  check(px(15, 8) == BG, "B.6-4: ninguno opaco deja ver BG_COLOR");
+
+  limpiar_oam(v);
+  poner_sprite(v, 0, 8, 8, 1, 0x20, 0);
+  poner_sprite(v, 1, 8, 8, 1, 1, 0);
+  escribir(0x00, 64 + 1, 1); pintar();
+  check(px(8, 8) == FONDO, "B.6-5: PRIO=1 sobre fondo opaco deja el fondo");
+  // Aunque el fondo opaco sea del mismo color que BG_COLOR.
+  v.write(0xD813, 1, resp); v.write(0xD814, 0x8C, resp); v.write(0xD815, 4, resp);
+  pintar();
+  check(px(8, 8) == BG, "PRIO: un tile opaco del color de BG_COLOR también tapa");
+  escribir(0x00, 64 + 1, 0x20); pintar();
+  check(px(8, 8) == C1, "B.6-6: PRIO=1 sobre fondo vacío deja el sprite 0");
+
+  fila_de(11, 100); ir_a_linea(v, 200);
+  check(!ovf(), "B.6-7: 11 sprites no activan OVERFLOW");
+  fila_de(12, 100); ir_a_linea(v, 199);
+  check(!ovf(), "B.6-8: OVERFLOW 0 antes de la línea");
+  v.tick_frame(); check(ovf(), "B.6-8: OVERFLOW 1 con 12 exactos");
+  for (int i = 0; i < 16; i++) v.tick_frame(); // 216: primera línea sin sprites
+  check(ovf(), "B.6-8: OVERFLOW se arrastra una línea física");
+  v.tick_frame(); check(!ovf(), "B.6-8: y luego cae");
+  pintar(); check(vistos(0, 11, 12), "B.6-8: los 12 se dibujan");
+  ir_a_linea(v, 482);
+  check(!ovf(), "B.6-9: en VBLANK no informa de y=100");
+  fila_de(12, 232); ir_a_linea(v, 482);
+  check(ovf(), "B.6-9: en VBLANK informa de y=239");
+
+  limpiar_oam(v);
+  poner_sprite(v, 0, 312 & 0xFF, 50, 1, 0x14, 0); pintar();
+  check(px(311, 50) == BG && px(312, 50) == C1 && px(319, 50) == C1 &&
+            px(0, 50) == BG, "B.6-10: 2x en X=312 se recorta");
+  limpiar_oam(v);
+  poner_sprite(v, 0, 511 & 0xFF, 50, 1, 0x04, 0); pintar();
+  check(px(0, 50) == BG && px(319, 50) == BG, "B.6-11: X=511 no se ve");
+
+  // B.3: un temporal de plano 0 por banco; el OAM solo usa 8 bits de dirección.
+  escribir(0x80, 9 * 8, 0x55);  // plano 0 de fondo...
+  escribir(0xC8, 5 * 8, 0xAA);  // ...y de sprite intercalado
+  escribir(0xA0, 9 * 8, 0);
+  escribir(0xE8, 5 * 8, 0);
+  check(v.bg_patterns()[9 * 16] == 0x55, "B.3: temporal de fondo propio");
+  check(v.sprite_patterns()[5 * 16] == 0xAA, "B.3: temporal de sprite propio");
+  escribir(0xC0, 0x100 + 2, 7);
+  check(v.oam()[2] == 7, "B.3: OAM ignora los bits altos de la dirección");
+}
+
+// Cortes de banda: sin redondear a filas de tile, y la inferior existe aunque no
+// haya superior ($D809 = $FF).
+static void test_bandas() {
+  Video v;
+  bool resp = false;
+  limpiar_oam(v);
+  for (int fila = 0; fila < 8; fila++) // tile 1 = color 1; columna 1 del mapa
+    for (int plano = 0; plano < 2; plano++) {
+      v.write(0xD800, (uint8_t)(8 + fila), resp);
+      v.write(0xD801, plano ? 0xA0 : 0x80, resp);
+      v.write(0xD802, plano ? 0 : 0xFF, resp);
+    }
+  for (int f = 0; f < 32; f++) {
+    v.write(0xD800, (uint8_t)(f * 64 + 1), resp);
+    v.write(0xD801, (uint8_t)((f * 64 + 1) >> 8), resp);
+    v.write(0xD802, 1, resp);
+  }
+  v.write(0xD80E, 100, resp); // solo banda inferior, en 100 (no múltiplo de 8)
+  v.write(0xD80F, 8, resp);   // con scroll 8: la columna 1 pasa a x = 0
+  std::vector<uint32_t> f((size_t)Video::W * Video::H, 0);
+  v.render(f.data());
+  check(f[99 * Video::W] == 0xFF4488CC, "bandas: la 99 sigue en la media");
+  check(f[100 * Video::W] == 0xFF0000AA, "bandas: la 100 ya es la inferior");
+  check(v.scroll().colision_x == 8, "bandas: la colisión usa la inferior sin superior");
 }
 
 // $D818 elige la entrada de paleta del trazo de la fuente. Se aplica al
@@ -564,6 +673,8 @@ int main() {
   test_scroll_vertical_ancho();
   test_barrido();
   test_sprites_line_buffer();
+  test_casos_manual();
+  test_bandas();
   test_font_color();
   if (fallos) {
     std::printf("test_video: %d FALLOS\n", fallos);

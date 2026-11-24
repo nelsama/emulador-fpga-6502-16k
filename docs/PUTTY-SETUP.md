@@ -105,7 +105,7 @@ Teclea `LS` + Enter:
 >LS
 Archivos:
   (vacio)
-Total: 0/16 archivos
+Total: 0/15 archivos
 
 >
 ```

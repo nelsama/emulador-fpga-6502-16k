@@ -128,15 +128,23 @@ void draw_glyph(SDL_Renderer* r, int x, int y, char c, int f) {
   // `f` es el factor de escala de cada píxel del glifo.
   const int idx = ((unsigned char)c) - 0x20;
   if (idx < 0 || idx >= 96) return;
+  // Un rectángulo por tramo horizontal y una sola llamada por glifo: píxel a píxel eran
+  // miles de llamadas a SDL por fotograma.
+  SDL_Rect tramos[32];
+  int n = 0;
   for (int row = 0; row < 8; row++) {
     const uint8_t bits = kFontC64[idx * 8 + row];
-    if (!bits) continue;
-    for (int col = 0; col < 8; col++) {
-      if (!(bits & (0x80 >> col))) continue;
-      SDL_Rect px{x + col * f, y + row * f, f, f};
-      SDL_RenderFillRect(r, &px);
+    for (int col = 0; col < 8;) {
+      if (!(bits & (0x80 >> col))) {
+        col++;
+        continue;
+      }
+      const int ini = col;
+      while (col < 8 && (bits & (0x80 >> col))) col++;
+      tramos[n++] = SDL_Rect{x + ini * f, y + row * f, (col - ini) * f, f};
     }
   }
+  if (n > 0) SDL_RenderFillRects(r, tramos, n);
 }
 
 // Paleta ANSI de 16 colores, la de consola (VGA). La usan tanto el texto como
@@ -457,6 +465,58 @@ void EmuWindow::dibujar_boton_vista(void* renderer, int x, int y, int w, int h,
 
 // Gestiona un clic en píxeles de ventana (el mismo espacio en que se dibujan
 // las zonas clicables).
+uint8_t EmuWindow::boton_en(int x, int y) const {
+  if (!panel_visible() || dialogo_.activo) return 0;
+  for (const Zona& z : zonas_) {
+    if (z.accion != "boton") continue;
+    if (x < z.x || x >= z.x + z.w || y < z.y || y >= z.y + z.h) continue;
+    return z.arg == "A" ? Gpio::BTN_A : Gpio::BTN_B;
+  }
+  return 0;
+}
+
+// Pulsadores A y B de $C005, a la derecha de la placa de LEDs. Se iluminan con lo que
+// lee la CPU, venga del ratón, del teclado, del mando o de HTTP.
+void EmuWindow::dibujar_botones(void* renderer) {
+#ifdef HAVE_SDL2
+  SDL_Renderer* ren = static_cast<SDL_Renderer*>(renderer);
+  const int w = 88, h = 46, sep = 8, y = 12;
+  // Mismo cálculo que panel_cache(): dónde acaba la placa de LEDs.
+  const int block_w = 6 * 30 + 34 + 4 * TERM_CW + 8;
+  const int fin_leds = (panel_w_ + block_w) / 2;
+  int ancho = (panel_w_ - PANEL_MARGEN - fin_leds - 2 * sep) / 2;
+  if (ancho > w) ancho = w;
+  if (ancho < 24) return; // panel demasiado estrecho
+  for (int i = 0; i < 2; i++) {
+    const uint8_t bit = i == 0 ? Gpio::BTN_A : Gpio::BTN_B;
+    const bool pulsado = (btn_panel_ & bit) == 0;
+    const bool fijado = (btn_fijado_ & bit) == 0;
+    SDL_Rect r{panel_w_ - PANEL_MARGEN - (2 - i) * ancho - (1 - i) * sep, y, ancho, h};
+    if (pulsado) SDL_SetRenderDrawColor(ren, 150, 50, 45, 255);
+    else         SDL_SetRenderDrawColor(ren, 44, 50, 60, 255);
+    SDL_RenderFillRect(ren, &r);
+    if (fijado)  SDL_SetRenderDrawColor(ren, 240, 200, 90, 255);
+    else         SDL_SetRenderDrawColor(ren, 90, 100, 116, 255);
+    SDL_RenderDrawRect(ren, &r);
+    const char* lineas[2] = {i == 0 ? "BTN A" : "BTN B",
+                             fijado ? "FIJADO" : (i == 0 ? "F1" : "F2")};
+    for (int l = 0; l < 2; l++) {
+      const int n = (int)std::strlen(lineas[l]);
+      if (n * TERM_CW > ancho) continue;
+      if (pulsado)     SDL_SetRenderDrawColor(ren, 255, 225, 220, 255);
+      else if (l == 0) SDL_SetRenderDrawColor(ren, 200, 210, 225, 255);
+      else             SDL_SetRenderDrawColor(ren, 120, 130, 145, 255);
+      for (int k = 0; k < n; k++)
+        draw_glyph(ren, r.x + (ancho - n * TERM_CW) / 2 + k * TERM_CW, y + 10 + l * 16,
+                   lineas[l][k], TERM_SCALE);
+    }
+    zonas_.push_back(Zona{r.x, r.y, r.w, r.h, "boton", i == 0 ? "A" : "B"});
+  }
+#else
+  (void)renderer;
+#endif
+}
+
 void EmuWindow::clic_en(int x, int y) {
   // 1) Diálogo de texto abierto: solo responden sus botones (el campo va por
   //    teclado). Se comprueban antes que cualquier otra zona, y SOLO las suyos:
@@ -1246,6 +1306,7 @@ void EmuWindow::present(const uint32_t* rgb, uint8_t leds) {
     // Las zonas clicables se regeneran aquí: `present()` es el único sitio que
     // las rellena y `clic_en()` las consume en la misma vuelta.
     zonas_.clear();
+    dibujar_botones(ren);
     const int alto_sd = dibujar_modulo_sd(ren, PANEL_MARGEN, alto_estado);
     const int y_consola = alto_estado + alto_sd;
 
@@ -1370,7 +1431,14 @@ bool EmuWindow::poll() {
         // evento ya vienen en ese espacio: NO hay que reescalarlas (con DPI
         // 125% el búfer de salida es mayor que la ventana y el clic acababa
         // cayendo en otra fila).
-        if (ev.button.button == SDL_BUTTON_LEFT) {
+        const uint8_t boton = boton_en(ev.button.x, ev.button.y);
+        if (boton && ev.button.button == SDL_BUTTON_LEFT) {
+          btn_fijado_ |= boton; // un clic normal también suelta el fijado
+          in.set(btn_raton_, boton, true);
+          SDL_CaptureMouse(SDL_TRUE); // para enterarse de que se suelta fuera
+        } else if (boton && ev.button.button == SDL_BUTTON_RIGHT) {
+          btn_fijado_ ^= boton;
+        } else if (ev.button.button == SDL_BUTTON_LEFT) {
           clic_en(ev.button.x, ev.button.y);
         } else if (ev.button.button == SDL_BUTTON_RIGHT) {
           // Botón derecho: vuelve a la vista normal desde cualquier modo.
@@ -1378,6 +1446,21 @@ bool EmuWindow::poll() {
         }
         break;
       }
+
+      case SDL_MOUSEBUTTONUP:
+        if (ev.button.button == SDL_BUTTON_LEFT && btn_raton_ != Gpio::BTN_IDLE) {
+          btn_raton_ = Gpio::BTN_IDLE;
+          SDL_CaptureMouse(SDL_FALSE);
+        }
+        break;
+
+      case SDL_WINDOWEVENT:
+        // Al perder el foco no llegan las teclas soltadas: no dejar nada pulsado.
+        if (ev.window.event == SDL_WINDOWEVENT_FOCUS_LOST) {
+          btn_teclado_ = btn_raton_ = Gpio::BTN_IDLE;
+          SDL_CaptureMouse(SDL_FALSE);
+        }
+        break;
 
       // --- Rueda del ratón: scroll de la consola o de la lista SD ---
       // Según dónde esté el cursor. En el resto de la ventana no hace nada.
@@ -1427,7 +1510,13 @@ bool EmuWindow::poll() {
         // Diálogo de texto abierto: el teclado es para el campo, no para el
         // joystick. Enter acepta, Esc cancela, Retroceso borra.
         if (dialogo_.activo) {
-          if (!down) break;
+          if (!down) {
+            // Soltar F1/F2 cuenta aunque el diálogo se haya abierto entretanto:
+            // si no, el pulsador se quedaría apretado.
+            if (ev.key.keysym.sym == SDLK_F1) in.set(btn_teclado_, Gpio::BTN_A, false);
+            if (ev.key.keysym.sym == SDLK_F2) in.set(btn_teclado_, Gpio::BTN_B, false);
+            break;
+          }
           // Al primer carácter se descarta el nombre viejo: el campo arranca
           // seleccionado para no tener que borrarlo a mano.
           auto escribir = [&](char c) {
@@ -1500,6 +1589,10 @@ bool EmuWindow::poll() {
           case SDLK_F11:
             if (down) siguiente_vista();
             break;
+          // Pulsadores de $C005. F1/F2 no compiten con el UART ni con el
+          // joystick, así que valen en los dos modos de teclado.
+          case SDLK_F1: in.set(btn_teclado_, Gpio::BTN_A, down); break;
+          case SDLK_F2: in.set(btn_teclado_, Gpio::BTN_B, down); break;
           // Scroll del terminal. RePág/AvPág se mueven una pantalla y
           // Inicio/Fin van al principio del historial o al fondo. Funcionan en
           // los dos modos de teclado: no compiten con nada (en modo UART esas
@@ -1540,6 +1633,7 @@ bool EmuWindow::poll() {
 
       case SDL_CONTROLLERDEVICEREMOVED:
         std::printf("Mando desconectado\n");
+        btn_mando_ = Gpio::BTN_IDLE;
         in.mando = Gpio::JOY_IDLE; // al irse, no debe dejar nada pulsado
         break;
 
@@ -1558,6 +1652,8 @@ bool EmuWindow::poll() {
           case SDL_CONTROLLER_BUTTON_RIGHTSHOULDER:
             in.set(m, Gpio::JOY_FIRE, down);
             break;
+          case SDL_CONTROLLER_BUTTON_BACK:  in.set(btn_mando_, Gpio::BTN_A, down); break;
+          case SDL_CONTROLLER_BUTTON_START: in.set(btn_mando_, Gpio::BTN_B, down); break;
           case SDL_CONTROLLER_BUTTON_DPAD_UP:    in.set(m, Gpio::JOY_UP, down);    break;
           case SDL_CONTROLLER_BUTTON_DPAD_DOWN:  in.set(m, Gpio::JOY_DOWN, down);  break;
           case SDL_CONTROLLER_BUTTON_DPAD_LEFT:  in.set(m, Gpio::JOY_LEFT, down);  break;

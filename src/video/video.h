@@ -34,6 +34,10 @@ public:
   static constexpr int V_VISIBLE = 480;
   static constexpr double FRAME_HZ = 27.0e6 / (858.0 * 525.0); // 59,94 Hz
 
+  static constexpr int NSL = 12; // sprites por línea (NSL de video_core.vhd)
+  // Init/SETUP: 4956 píxeles = 5,78 líneas; se redondea a líneas enteras.
+  static constexpr int SETUP_LINEAS = 6;
+
   Video();
 
   bool decodes(uint16_t addr) const override;
@@ -44,11 +48,17 @@ public:
   // duración exacta del hardware.
   void tick_frame();
 
-  // Avanza el barrido hasta la línea absoluta `linea` (contada desde el
-  // arranque, 525 por frame). Lo llama el bucle principal con la línea que
-  // corresponde al reloj real, de modo que la frecuencia de frames es la del
-  // FPGA (59,94 Hz) y no la del número de vueltas del bucle.
-  void sync_scanlines(long long linea);
+  // Avanza el barrido los ciclos de CPU dados: 8 píxeles por ciclo, 858 por línea.
+  void tick_cpu(uint32_t cpu_cycles) {
+    pixeles_ += cpu_cycles * 8;
+    while (pixeles_ >= 858) {
+      pixeles_ -= 858;
+      tick_frame();
+    }
+  }
+
+  // Botón de reset de la placa: relanza el init de arranque (tabla del manual B.3).
+  void reset_placa();
 
   // Genera la imagen (RGBA8888 / 320x240) en el buffer del llamador.
   //
@@ -95,16 +105,11 @@ public:
   int celda_colision(int sprite) const;
 
 private:
-  // Barrido: última línea simulada desde el arranque (para sync_scanlines).
-  long long scanline_ = 0;
-#ifdef EMU_VIDEO_TRACE
-  bool trace_vblank_ = false; // solo para el diagnóstico de frecuencia
-#endif
+  uint32_t pixeles_ = 0; // píxeles físicos de la línea en curso
   // Registros directos ($D800-$D817)
   uint8_t vid_addr_lo_ = 0; // $D800
   uint8_t vid_addr_hi_ = 0; // $D801
   // ($D802 es write-only, dispara la escritura)
-  uint8_t status_ = 0;       // $D803 (R)
   uint8_t scroll_x_lo_ = 0, scroll_x_hi_ = 0; // $D804/$D805
   uint8_t scroll_y_lo_ = 0, scroll_y_hi_ = 0; // $D806/$D807
   uint8_t raster0_ = 0xFF;   // $D809
@@ -120,22 +125,19 @@ private:
   // fuente (0 = invisible, 1, 2, 3 = blanco por defecto). Es estable, como el
   // scroll, y se aplica al re-expandir (SETUP), no al escribirlo.
   uint8_t font_color_ = 3;
-  // Setup pedido por $D816 pero aun no aplicado: el core lo ejecuta mientras
-  // dura el BUSY, y hasta terminarlo ignora las escrituras del CPU.
-  bool    setup_pendiente_ = false;
+  // Líneas que le quedan al setup pedido por $D816 (0 = ninguno): hasta
+  // terminarlo, el core ignora las escrituras del CPU a la VRAM.
+  int     setup_lineas_ = 0;
+  bool    init_arranque_ = false; // el init en curso es el del reset, no un SETUP
   // SOLID_HIT ($D803 bit 5): algún sprite toca una celda con el bit 4 del
   // atributo. Se recalcula entero al entrar en cada blanking.
   bool    solid_hit_ = false;
-  // SPRITE_OVERFLOW ($D803 bit 6): en la línea que se está barriendo hubo más
-  // de 8 sprites que la cruzaban y no cabían en el line buffer. En el RTL es un
-  // pestillo que se rearma al principio de CADA línea (`h_cnt = 0`), no por
-  // frame: refleja la última línea dibujada, no el histórico.
-  bool    sprite_overflow_ = false;
-  // El barrido aún no se ha hecho, así que el primer tick SIEMPRE debe
-  // ejecutarlo: el contador interno arranca fuera del blanking (status $10),
-  // no dentro. Poner esto a false hace que el primer flanco cuente; el test
-  // `test_solid_hit` lo cubre.
-  bool    vblank_previo_ = false;
+  // OVERFLOW ($D803 bit 6): la línea física actual o la anterior llegaron a NSL
+  // sprites.
+  bool    lleno_ = false;
+  bool    lleno_previo_ = false;
+  // Línea física del barrido (0..524). Arranca en el blanking.
+  int     linea_ = V_VISIBLE;
 
   // VRAM
   std::array<uint8_t, 2048> tilemap_{}; // área 00
@@ -152,11 +154,22 @@ private:
   // Último frame renderizado (320x240 RGBA8888).
   std::vector<uint32_t> last_frame_;
 
-  // Plano 0 retenido al escribir la fila (ver manual §2.2)
-  uint8_t pending_plane0_ = 0;
-  bool    plane0_valid_ = false;
+  // Plano 0 retenido al escribir la fila (manual del core, B.3): uno por banco.
+  uint8_t plano0_fondo_ = 0;
+  uint8_t plano0_sprite_ = 0;
+
+  // Hueco del line buffer de sprites.
+  struct Entrada {
+    int x;
+    bool scale2x, flip_x, prio;
+    uint8_t pal;
+    uint8_t p0, p1; // fila del patrón, ya con FLIP_Y aplicado
+  };
 
   // Helpers
+  int evaluar_linea(int py, Entrada* lb) const;
+  void calcular_bandas(std::array<uint8_t, V_VISIBLE>& bandas, int& fin) const;
+  uint8_t componer_status() const;
   void write_vram(uint8_t lo, uint8_t hi, uint8_t data);
   void default_palette();
   uint16_t pal_index(int area, uint8_t attrib_byte, uint8_t color) const;

@@ -26,6 +26,9 @@ uint8_t SpiSd::read(uint16_t addr, bool& resp) {
       return (uint8_t)(ss_mask_ & 0x0F);
     case 0xC045: // CS_ENABLE (local)
       return (uint8_t)(cs_enable_ & 0x01);
+    case 0xC046:
+    case 0xC047:
+      return 0;
     default:
       resp = false;
       return 0;
@@ -54,12 +57,13 @@ void SpiSd::write(uint16_t addr, uint8_t data, bool& resp) {
       break;
     case 0xC044: // SS_MASK
       ss_mask_ = (uint8_t)(data & 0x0F);
+      if (!sd_selected() && sd_) sd_->deselect();
       break;
     case 0xC045: // CS_ENABLE
       cs_enable_ = (uint8_t)(data & 0x01);
       // Desactivar CS reinicia el estado SPI de la tarjeta (como en el
       // hardware real: la tarjeta vuelve a esperar un comando).
-      if (!cs_enable_ && sd_) sd_->deselect();
+      if (!sd_selected() && sd_) sd_->deselect();
       break;
     default:
       resp = false;

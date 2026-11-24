@@ -246,6 +246,7 @@ pantalla sin intervención humana**.
 |---|---|---|
 | **`POST /run?name=X.BIN&addr=0800`** | texto | **Reinicia, carga y ejecuta** (cuerpo = binario). Equivale al botón `RUN` |
 | **`/joy?press=left,fire&hold=200`** | texto | **Pulsa el joystick** (puerto 1) sin pasar por el UART. `release=1` suelta todo |
+| **`/btn?press=a,b&hold=200`** | texto | **Pulsa BTN_A/BTN_B** (`$C005`). `release=1` los suelta |
 | `/` | HTML | Índice con vista previa del vídeo (se refresca sola) + panel de estado en vivo |
 | `/screen.png` | PNG | **Último frame presentado** (320×240): lo que se vio de verdad |
 | `/screen.png?scale=2` | PNG | La misma captura ampliada ×2, ×3 o ×4 (útil para leer texto) |
@@ -683,13 +684,13 @@ python tools/sd_tool.py delete  tarjeta.img JUEGO.BIN
 python tools/sd_tool.py format  tarjeta.img
 ```
 
-**Nombres:** el espacio real es **8.3** (8 caracteres de base + 3 de extensión);
-la tabla guarda 12 bytes contando el `\0`, y el monitor los muestra en
-mayúsculas.
+**Nombres:** 8 caracteres de base + 3 de extensión, con un máximo de **11 en total**
+(punto incluido): la tabla guarda 12 bytes con el `\0`, y el monitor no encuentra un
+nombre de 12. Caben **15 archivos** de hasta **65535 bytes**.
 
 > **Los nombres largos se recortan, no se rechazan.** Al añadir un archivo desde
 > la ventana (`+ Añadir`) o con `sd_tool.py`, un nombre de Windows como
-> `river_raid_deluxe.bin` entra como `RIVER_RA.BIN`. Lo que sí se rechaza es un
+> `river_raid_deluxe.bin` entra como `RIVER_RA.BI`. Lo que sí se rechaza es un
 > nombre vacío o con caracteres que no caben en 8.3 (`/`, `\\`).
 
 **Otras herramientas:**
@@ -709,7 +710,7 @@ mayúsculas.
 | `$0000-$3FFF` | RAM 16 KB (stack en `$3E00-$3FFF`) |
 | `$8000-$BFFF` | ROM del monitor 16 KB |
 | `$FFFA-$FFFF` | Vectores NMI/RESET/IRQ (mapeados dentro de la ROM) |
-| `$C000-$C004` | GPIO: puerto 1 (joystick), puerto 2 (6 LEDs), configs y flag de usuario |
+| `$C000-$C005` | GPIO: puerto 1 (joystick), puerto 2 (6 LEDs), configs, flag de usuario y pulsadores |
 | `$C020-$C023` | UART: datos TX/RX, STATUS/CONTROL, baudrate |
 | `$C030-$C03F` | Timer / RTC: contadores con latch, timer programable |
 | `$C040-$C047` | SPI: datos, estado, CS para la SD |
@@ -762,7 +763,7 @@ El SID player usa `$D41D-$D41F` para mover los 6 LEDs.
 `$A0` patrón fondo plano 1, `$C0` OAM, `$C8` patrón sprite plano 0,
 `$E8` patrón sprite plano 1.
 
-**GPIO (`$C000-$C003`)**
+**GPIO (`$C000-$C005`)**
 
 | Dir | Uso |
 |---|---|
@@ -771,6 +772,23 @@ El SID player usa `$D41D-$D41F` para mover los 6 LEDs.
 | `$C002` | configuración puerto 1 (1 = entrada) |
 | `$C003` | configuración puerto 2 (el monitor pone `0xC0`) |
 | `$C004` | **flag de usuario persistente** (bit 0, R/W) |
+| `$C005` | **pulsadores** (R): bit 0 = BTN_A, bit 1 = BTN_B, **0 = pulsado**; resto 0 |
+
+**Pulsadores (`$C005`)**
+
+| | BTN_A | BTN_B |
+|---|---|---|
+| Teclado (en los dos modos) | **F1** | **F2** |
+| Mando | Back / Select | Start |
+| Ratón | botón **BTN A** del panel | botón **BTN B** del panel |
+| HTTP | `/btn?press=a&hold=200` | `/btn?press=b&hold=200` |
+
+En el panel, junto a los LEDs: el clic izquierdo pulsa mientras se mantiene y el
+**derecho lo deja fijado** (otro clic lo suelta), para poder pulsar los dos a la vez.
+Se iluminan con lo que lee la CPU.
+
+`/btn?press=a,b` pulsa los dos y `/btn?release=1` los suelta. Su estado sale en
+`/state.txt`. El emulador no simula rebotes; en la placa el programa debe filtrarlos.
 
 **Flag de usuario (`$C004`, bit 0)**
 
@@ -812,9 +830,13 @@ Se emula en `Gpio` (`src/gpio_uart.cpp`) y aparece en `/state.txt` como
 
 ### CPU
 
-Tabla de ciclos real por opcode (2–7 ciclos). El bucle principal ejecuta
-**3.375 MHz reales** comparando con el reloj de pared, no contando instrucciones.
-Esto es lo que hace que el SID suene al tempo correcto y el timer sea fiable.
+Réplica de `cpu65xx_fast.vhd` (6510 NMOS): los 256 opcodes, modo decimal, rama tomada
+y cruce de página. Los opcodes JAM paran la CPU hasta el reset. El bucle principal
+ejecuta **3.375 MHz reales** comparando con el reloj de pared, en bloques de 1 ms, y
+duerme el resto. Los periféricos avanzan **con cada instrucción**.
+
+`make cosim` la compara con el VHDL usando GHDL: datos y ciclos de programas aleatorios
+con todos los opcodes menos JAM.
 
 ### UART
 
@@ -823,8 +845,9 @@ Fiel a `uart.vhd`: los bytes del host entran en una FIFO y se publican al CPU
 bytes quedan pendientes antes de leer el actual; si se entregan todos de golpe,
 el monitor corta el eco.
 
-FIFO con tope de 64 KB: si se llena, se pierde el byte y se marca *overrun*
-(igual que el hardware).
+La transmisión también tarda **~87 µs por byte**: mientras tanto `TX_READY` = 0 y
+`TX_BUSY` = 1. Las IRQ de TX y RX llegan a la CPU. La entrada del host espera a que la
+CPU lea (tope de 64 KB), así que no se pierde como en un cable real.
 
 ### SD / SPI
 
@@ -837,6 +860,10 @@ sector a sector. El fichero de imagen se mantiene **abierto entre escrituras**
 Fiel a `timer_rtc.vhd`. El reloj de sistema es 6.75 MHz y el de CPU 3.375 MHz,
 así que **1 µs = 3.5 ciclos de CPU**. Los contadores de ticks y µs corren
 siempre; se leen **por latch** (`$C03C`).
+
+La cuenta atrás (`$C034-$C037`) corre a **6,75 MHz / (prescaler + 1)**, con recarga
+(bit 2) e IRQ a la CPU (bit 1). `IRQ_FLAG` (bit 3) y `ZERO` (bit 7) se borran
+escribiendo 1.
 
 Un error típico: leer el contador vivo en vez del latch hace que el SID player
 dé tirones cada pocos frames.
@@ -852,21 +879,14 @@ Las envolventes se leen en `$D41C` (voz 3, compatible C64) y `$D41D-$D41F`
 
 #### Sincronía con el vídeo
 
-El audio se genera **antes** de ejecutar la CPU en cada vuelta del bucle, con
-los mismos ciclos. Si se genera después, el sonido va siempre un bloque por
-detrás de la imagen (un efecto salta en pantalla y suena «un poco después»).
+El SID avanza con los ciclos de la CPU y se pone al día en cada acceso a sus registros.
+La diferencia con el reloj de la tarjeta de sonido se corrige quitando o repitiendo
+muestras sueltas (`AudioOutput::push_sincronizado`).
 
-Hay dos ajustes finos que afectan al desfase:
-
-1. **Corrección del resampler.** reSIDfp con reloj 964285,7 Hz y salida a 48 kHz
-   entrega **48 053 muestras/s**, un 0,11 % más de las que consume el dispositivo.
-   Ese excedente llena el anillo y deja sin datos al audio a ratos. Se compensa
-   con `Sid::cycle_correction()` al pedirle ciclos.
-
-2. **Latencia del búfer.** El anillo mantiene un colchón (`AUDIO_TARGET_MS`,
-   por defecto 25 ms) más el período del dispositivo (~21 ms con 1024 muestras):
-   **~42 ms entre que el juego toca el SID y suena**. No se puede bajar mucho más
-   sin que un tropiezo del hilo produzca silencios.
+**Latencia del búfer.** El anillo mantiene un colchón (`AUDIO_TARGET_MS`,
+por defecto 25 ms) más el período del dispositivo (~21 ms con 1024 muestras):
+**~42 ms entre que el juego toca el SID y suena**. No se puede bajar mucho más
+sin que un tropiezo del hilo produzca silencios.
 
 Con `EMU_TRACE=1` el emulador informa de la latencia real:
 
@@ -976,8 +996,8 @@ pueden escribir en cualquier momento.
 
 > Fuente: `docs/07-MANUAL-PROGRAMACION.md` §1.1 y §6.2c del proyecto del FPGA
 > (commits `0ae9253` y `b2aff50`). Las reglas de prioridad y transparencia entre
-> sprites de aquel documento ya están descritas en [Sprites: gana el índice
-> menor](#sprites-gana-el-índice-menor-y-solo-caben-8-por-línea).
+> sprites de aquel documento ya están descritas en [Sprites: gana el opaco de
+> menor índice](#sprites-gana-el-opaco-de-menor-índice-y-caben-12-por-línea).
 
 #### Estado inicial de la VRAM
 
@@ -986,7 +1006,8 @@ porque hay zonas que el programa **no** posee:
 
 | Zona | Estado tras el arranque |
 |---|---|
-| Tilemap y atributos (2048 celdas) | a cero (tilemap con `$20` en las fases de texto) |
+| Tilemap (2048 celdas) | `$20` (tras un `SETUP`, a cero) |
+| Atributos (2048 celdas) | a cero |
 | Patrones **fondo** 0–7 | **8 tiles de demo** (tierra, césped, copa, tronco, nube, 2 piedras, matojo) |
 | Patrones **fondo** `$20`–`$7F` | **fuente ASCII** (se expande de 1bpp a 2bpp) |
 | Patrones **sprite 0–2** | formas de demo: cara, rombo y X |
@@ -1072,51 +1093,35 @@ en la placa.
 > margen, y el emulador escribe en todas. No se modela porque no hay evidencia
 > de que un programa real escriba `$D815` en ciclos consecutivos.
 
-#### Sprites: gana el índice menor, y solo caben 8 por línea
+#### Sprites: gana el opaco de menor índice, y caben 12 por línea
 
-El core **no dibuja los 32 sprites uno sobre otro**. Tiene un *line buffer* de
-**8 entradas** (`NSL = 8` en `video_core.vhd`) que trabaja en dos fases:
+El core usa un *line buffer* de **12 entradas** (`NSL = 12`):
 
-1. En el blanking de cada línea recorre el OAM y guarda en el buffer los
-   **primeros 8** sprites que la cruzan.
-2. En el barrido visible, para cada píxel busca en el buffer el **primer**
-   sprite que lo cubre (el de **menor índice**) y usa ese.
+1. Al empezar cada línea recorre el OAM y guarda los **primeros 12** sprites que la
+   cruzan en Y. Los que están fuera de pantalla en X o son transparentes también
+   ocupan hueco; los de `Y ≥ 248`, no.
+2. En cada píxel se ve el sprite **opaco de menor índice**. Donde ese es color 0 se
+   ve el siguiente, y si ninguno es opaco, el fondo (**transparencia entre sprites**).
 
-De ahí salen dos reglas que sorprenden si vienes de otras consolas:
-
-| Regla | Consecuencia |
-|---|---|
-| **Gana el índice menor**, no el último dibujado | Un sprite de índice mayor **se recorta** contra el hueco del menor: por la parte que "sobra" se ve el **fondo**, nunca el otro sprite |
-| **Solo 8 sprites por línea** | El 9º y siguientes **no se dibujan**; solo activan `OVERFLOW` |
-
-Es decir: **entre sprites no hay prioridad configurable**. Si el objeto de
-índice menor es transparente en un píxel, ahí se ve **BG_COLOR** o el tile de
-fondo, aunque haya otro sprite tapándolo. Para cambiar quién manda, hay que
-**cambiar el orden de los sprites en el OAM** (el que deba verse delante, con
-índice menor).
-
-> **Esto no es transparencia entre sprites.** Un sprite no se "ve a través" de
-otro: el que queda delante es opaco en todos sus píxeles, y donde él no pinta
-(hueco o color 0) aparece el fondo. Lo que **sí** es transparente es el **color
-0** del propio sprite contra el fondo.
->
-> **`PRIO` (bit 5 de `FLAGS`) no cambia esto.** Solo decide si el sprite va
-delante o detrás del **fondo**; entre sprites manda el índice.
+`PRIO` (bit 5 de `FLAGS`) se aplica **después**, con el sprite ya elegido: uno opaco
+con `PRIO=1` oculta a los de índice mayor aunque a él lo tape el fondo.
 
 ##### `OVERFLOW` (`$D803` bit 6)
 
-Se activa cuando en una línea hubo **más de 8 sprites** cruzándola y no cabían
-en el line buffer. Es un pestillo que se **rearma al principio de cada línea**
-(`h_cnt = 0` en el RTL) y se vuelve a subir si esa línea desborda; **leer `$D803`
-no lo limpia**, pero tampoco acumula entre líneas.
+Vale 1 cuando la línea física actual **o la anterior** llegan a **12 sprites** (con
+12 exactos también, aunque no se pierda ninguno). Leer `$D803` no lo limpia. En
+VBLANK informa **solo de la línea 239**; para otra línea hay que leerlo mientras se
+dibuja. El emulador lo actualiza línea a línea, sincronizado con los ciclos de CPU.
 
-Sirve como aviso de "estás poniendo demasiados sprites solapados en vertical":
-si se enciende, los que no entraron **no se ven**.
+> `make test` cubre los 11 casos del apéndice B.6 del manual del core
+> (`test_casos_manual`).
 
-> El emulador reproduce ambas reglas desde `929758c`, y `make test` las cubre
-> (`test_sprites_line_buffer`): el índice menor manda, un sprite transparente de
-> índice mayor no borra al menor, y `OVERFLOW` se activa con 9 sprites en una
-> línea pero no con 8.
+#### Bandas de scroll
+
+El corte **no se redondea** a filas de 8 píxeles: la línea lógica `R` es la primera de
+la banda nueva. En la placa, su primera línea física usa aún la anterior; el emulador
+genera 240 líneas y toma la segunda. La banda inferior funciona también sin superior
+(`$D809 = $FF`).
 
 #### `SOLID_HIT`: colisión sprite ↔ tile sólido
 
@@ -1220,7 +1225,8 @@ Puerto 1 = **joystick Atari (DB9)**, puerto 2 = **6 LEDs** del Tang Nano 9K.
 
 Ambos son activos en bajo y **bidireccionales**, como en el `Board.vhd`: un bit
 configurado como salida en `$C002`/`$C003` devuelve el valor escrito; uno
-configurado como entrada (`1`) devuelve el pin. Al arrancar todo son salidas,
+configurado como entrada (`1`) devuelve el pin. Al arrancar, y tras el reset,
+los cuatro registros valen `$FF` (todo entradas). El monitor cambia el puerto 2,
 así que el programa debe poner a entrada los bits del joystick.
 
 #### Mapa del joystick
@@ -1252,6 +1258,7 @@ El teclado del PC tiene **dos destinos**, y los elige un selector en el panel
 | Escribir en el monitor | Sí (ver abajo) | — | — |
 | Mover | — | Cursores o **WASD** | Stick izquierdo o cruceta |
 | Fuego | — | **Espacio**, Z, Ctrl izq. o Intro | A, B, X, Y, hombros o gatillos |
+| Pulsadores `$C005` (BTN_A / BTN_B) | **F1** / **F2** | **F1** / **F2** | Back / Start |
 | Cambiar de vista (normal / solo vídeo / completa) | **F11** o Alt+Intro | **F11** o Alt+Intro | Clic en la pestaña del margen |
 | Volver a la vista normal | **Esc** o clic derecho | **Esc** o clic derecho | — |
 
@@ -1417,11 +1424,10 @@ listado de la tarjeta y sus acciones. Todo es **clicable con el ratón**:
   ...
 ```
 
-- **`RESET`**: **reinicia la CPU**, igual que el comando `Q` del monitor, pero
-  desde el ratón. Es la salida cuando un programa **se cuelga** o entra en un
-  bucle que no lee el UART: entonces no hay forma de teclear `Q`. Vacía también
-  la cola de entrada del UART (lo pendiente era para el programa anterior) y
-  **no** toca la SD, el vídeo ni el SID — es reset de CPU, como en la placa.
+- **`RESET`**: es el **botón de reset de la placa**: reinicia la CPU, el UART, el timer,
+  el GPIO, el SID, el scroll y las bandas, y relanza el init del vídeo. Se conservan la
+  RAM, el OAM, las paletas y el flag de `$C004`. Es la salida cuando un programa se
+  cuelga o no lee el UART. Descarta también la entrada pendiente del UART.
 - **`RUN`**: **carga el programa y lo ejecuta** sin abrir PuTTY. Abre un cuadro
   con la **dirección de carga en hexa** (`0800` por defecto, seleccionada para
   teclearla directamente); **Enter** o **`Aceptar`** arranca. Equivale a
@@ -1441,7 +1447,7 @@ listado de la tarjeta y sus acciones. Todo es **clicable con el ratón**:
 > `LOAD` se quedaría en la FIFO del puerto serie sin que nadie lo leyera (lo que
 > hacía que "el segundo botón no cargara"). Por eso `RUN` hace siempre:
 >
-> 1. **reset de la CPU** (lo mismo que el comando `Q` del monitor),
+> 1. **reset de la placa** (lo mismo que el botón `RESET`),
 > 2. **vacia la FIFO de entrada del UART** (si no, los comandos viejos llegarían
 >    de golpe al monitor nuevo),
 > 3. manda `LOAD <nombre> <dir>`,
@@ -1463,7 +1469,7 @@ listado de la tarjeta y sus acciones. Todo es **clicable con el ratón**:
 > `sd_tool.py`, otro emulador o la propia CPU).
 
 El módulo tiene **alto variable**: con la tarjeta vacía ocupa una fila de aviso
-y crece hasta mostrar **16 archivos** (el máximo de la MicroFS). La ventana
+y crece hasta mostrar **15 archivos** (el máximo de la MicroFS). La ventana
 crece o encoge con él para que la consola de 24 filas no se recorte nunca.
 
 > **Si la ventana no cabe en la pantalla** (portátil con DPI alto, o muchos
@@ -1612,7 +1618,8 @@ make test                     # pruebas del intérprete (no necesitan SDL)
 ./test_terminal.exe ROM.bin   # además interpreta un binario y muestra el resultado
 ```
 
-`make test` cubre CRLF, `ED`/`EL`/`ECH`, SGR, cursor, scroll, CP437, secuencias
+`make test` prueba también CPU, timer, UART, SD y reset (`test_perif`), el vídeo
+(`test_video`) y el GPIO. Del terminal cubre CRLF, `ED`/`EL`/`ECH`, SGR, cursor, scroll, CP437, secuencias
 desconocidas, TAB/BS y auto-wrap.
 
 #### Añadir módulos al panel lateral

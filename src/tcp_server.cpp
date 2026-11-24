@@ -98,6 +98,7 @@ void TcpServer::close_client(const char* motivo) {
   if (client_ != INVALID_SOCKET) {
     closesocket(client_);
     client_ = INVALID_SOCKET;
+    tx_pendiente_.clear();
     // El motivo ayuda a diagnosticar: un "connection refused" posterior suele
     // venir de un cierre abrupto anterior.
     if (motivo) std::printf("Cliente desconectado (%s)\n", motivo);
@@ -161,18 +162,23 @@ void TcpServer::poll() {
   // descartan (el ESC aislado se pierde). Se agrupan los bytes disponibles en
   // cada vuelta para que la secuencia viaje completa.
   if (client_ != INVALID_SOCKET && on_tx_available) {
-    uint8_t block[1024];
-    int count = 0;
-    while (count < (int)sizeof(block) && on_tx_available()) {
-      block[count++] = on_tx_dequeue();
+    while (tx_pendiente_.size() < 4096 && on_tx_available()) {
+      tx_pendiente_.push_back((char)on_tx_dequeue());
     }
-    if (count > 0) {
-      int offset = 0;
-      while (offset < count) {
-        int sent = ::send(client_, (const char*)block + offset, count - offset, 0);
-        if (sent <= 0) break; // sin espacio ahora o error: el resto se pierde
-        offset += sent;
+    while (!tx_pendiente_.empty()) {
+      const int sent = ::send(client_, tx_pendiente_.data(), (int)tx_pendiente_.size(), 0);
+      if (sent > 0) {
+        tx_pendiente_.erase(0, (size_t)sent);
+        continue;
       }
+      // Sin espacio ahora: lo que queda se reintenta en la vuelta siguiente.
+#ifdef _WIN32
+      const bool espera = WSAGetLastError() == WSAEWOULDBLOCK;
+#else
+      const bool espera = errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR;
+#endif
+      if (!espera) close_client("error al enviar");
+      break;
     }
   }
 }

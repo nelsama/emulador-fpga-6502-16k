@@ -20,6 +20,7 @@ typedef int socket_t;
 
 #include <cstdint>
 #include <functional>
+#include <string>
 
 class TcpServer {
 public:
@@ -45,4 +46,5 @@ private:
 
   socket_t listen_ = INVALID_SOCKET;
   socket_t client_ = INVALID_SOCKET;
+  std::string tx_pendiente_; // bytes sacados del UART y aún no aceptados por el socket
 };

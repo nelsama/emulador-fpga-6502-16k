@@ -22,7 +22,9 @@
 // ============================================================================
 
 SdCardImpl::~SdCardImpl() {
-  if (!img_.empty()) save();
+  // Cada sector ya se vuelca al escribirlo: solo se reescribe la imagen entera si
+  // quedó algo sin guardar. Hacerlo siempre pisaba cambios hechos desde fuera.
+  if (dirty_) save();
   if (file_) {
     std::fclose(static_cast<FILE*>(file_));
     file_ = nullptr;
@@ -37,27 +39,35 @@ static uint16_t get16(const uint8_t* p) { return (uint16_t)(p[0] | (p[1] << 8));
 // ---------------------------------------------------------------------------
 
 bool SdCardImpl::open(const std::string& path, uint32_t size_mb) {
-  path_ = path;
+  std::vector<uint8_t> nueva;
+  FILE* f = std::fopen(path.c_str(), "rb");
+  if (f) {
+    std::fseek(f, 0, SEEK_END);
+    const long n = std::ftell(f);
+    std::fseek(f, 0, SEEK_SET);
+    bool ok = n >= 1024 || n == 0;
+    if (ok && n > 0) {
+      nueva.resize((size_t)n);
+      ok = std::fread(nueva.data(), 1, (size_t)n, f) == (size_t)n;
+    }
+    std::fclose(f);
+    if (!ok) {
+      // Nunca reformatear un archivo que ya existe: podría ser otra cosa.
+      std::fprintf(stderr, "SD: %s no es una imagen valida (no se toca)\n", path.c_str());
+      return false;
+    }
+  }
+  // A partir de aquí se sustituye la imagen anterior.
+  if (dirty_) save();
   if (file_) {
     std::fclose(static_cast<FILE*>(file_));
     file_ = nullptr;
   }
-  FILE* f = std::fopen(path.c_str(), "rb");
-  if (f) {
-    std::fseek(f, 0, SEEK_END);
-    long n = std::ftell(f);
-    std::fseek(f, 0, SEEK_SET);
-    img_.resize((size_t)n);
-    if (n > 0 && std::fread(img_.data(), 1, (size_t)n, f) != (size_t)n) {
-      std::fprintf(stderr, "SD: lectura incompleta de %s\n", path.c_str());
-    }
-    std::fclose(f);
-    if (!mount()) {
-      std::fprintf(stderr, "SD: imagen sin FAT16 válido, reformateando\n");
-      format(size_mb);
-    }
-    return true;
-  }
+  deselect();
+  app_cmd_ = initialized_ok_ = sdhc_ = false;
+  path_ = path;
+  img_.swap(nueva);
+  if (!img_.empty()) return mount();
 
   format(size_mb);
   return save();
@@ -74,11 +84,12 @@ bool SdCardImpl::save() {
   } else {
     std::fseek(f, 0, SEEK_SET);
   }
-  std::fwrite(img_.data(), 1, img_.size(), f);
-  std::fflush(f);
-  if (own) std::fclose(f);
-  dirty_ = false;
-  return true;
+  bool ok = std::fwrite(img_.data(), 1, img_.size(), f) == img_.size();
+  ok = std::fflush(f) == 0 && ok;
+  if (own) ok = std::fclose(f) == 0 && ok;
+  if (ok) dirty_ = false;
+  else std::fprintf(stderr, "SD: error al guardar %s\n", path_.c_str());
+  return ok;
 }
 
 // Escribe un solo sector en disco sin reescribir toda la imagen.
@@ -90,14 +101,17 @@ void SdCardImpl::flush_sector(uint32_t sector) {
   if (img_.empty() || path_.empty() || sector >= img_.size() / 512) return;
   if (!file_) {
     file_ = std::fopen(path_.c_str(), "r+b");
-    if (!file_) return;
+    if (!file_) {
+      dirty_ = true; // se reintenta al cerrar
+      return;
+    }
   }
   FILE* f = static_cast<FILE*>(file_);
   std::fseek(f, (long)sector * 512, SEEK_SET);
-  std::fwrite(img_.data() + (size_t)sector * 512, 1, 512, f);
+  const bool escrito = std::fwrite(img_.data() + (size_t)sector * 512, 1, 512, f) == 512;
   // Volcar al sistema operativo (sin cerrar) para no perder datos, sin la
   // penalización de cerrar/abrir el fichero.
-  std::fflush(f);
+  if (std::fflush(f) != 0 || !escrito) dirty_ = true;
 }
 
 // ---------------------------------------------------------------------------
@@ -107,7 +121,7 @@ void SdCardImpl::flush_sector(uint32_t sector) {
 //    Sector 0: tabla de archivos (512 B)
 //      bytes 0-1   : magic "FM" (0x46, 0x4D)
 //      bytes 6-7   : proximo sector libre (little-endian)
-//      bytes 16-527: 16 entradas de 32 bytes
+//      bytes 16-495: 15 entradas de 32 bytes
 //        +0..11  nombre (null-terminated, 8.3)
 //        +12..13 sector inicial (LE)
 //        +14..15 tamano en bytes (LE)
@@ -160,7 +174,7 @@ bool SdCardImpl::mount() {
 // ---------------------------------------------------------------------------
 //  Gestión de archivos en caliente (MicroFS)
 // ---------------------------------------------------------------------------
-//  Mismo formato que tools/sd_tool.py: 16 entradas de 32 bytes en el sector 0
+//  Mismo formato que tools/sd_tool.py: 15 entradas de 32 bytes en el sector 0
 //  (nombre 8.3 terminado en NUL, sector inicial, tamaño y sectores ocupados),
 //  y el "proximo sector libre" en los bytes 6-7.
 
@@ -201,39 +215,29 @@ std::string normalizar_nombre(const std::string& in) {
       out.push_back((char)((c >= 'a' && c <= 'z') ? c - 32 : c));
     }
   }
+  // MicroFS guarda 11 caracteres y un NUL: con 12 el monitor no encuentra el archivo.
+  // Se recorta igual que su SAVE (FONTCOLO.BIN -> FONTCOLO.BI).
+  if (out.size() > 11) out.resize(11);
   return out;
+}
+
+// Compara un nombre de la tabla con uno normalizado. Las tarjetas escritas por
+// versiones anteriores pueden tener nombres de 12 caracteres.
+bool mismo_nombre(const std::string& tabla, const std::string& normalizado) {
+  return tabla.substr(0, 11) == normalizado;
 }
 
 }  // namespace
 
 std::string SdCardImpl::resolver_nombre(const std::string& pedido) const {
-  auto normaliza = [](const std::string& in) {
-    // Misma regla que normalizar_nombre: base 8 + punto + extensión 3, mayúsculas.
-    std::string base = in, ext;
-    const size_t p = in.find_last_of('.');
-    if (p != std::string::npos) {
-      base = in.substr(0, p);
-      ext = in.substr(p + 1);
-    }
-    if (base.size() > 8) base.resize(8);
-    if (ext.size() > 3) ext.resize(3);
-    for (auto& c : base) {
-      if (c >= 'a' && c <= 'z') c = (char)(c - 32);
-    }
-    for (auto& c : ext) {
-      if (c >= 'a' && c <= 'z') c = (char)(c - 32);
-    }
-    return ext.empty() ? base : base + "." + ext;
-  };
-
   const auto lista = listar_archivos();
   for (const auto& ent : lista) {
     if (ent.nombre == pedido) return pedido;
   }
   // El monitor solo conoce el nombre ya normalizado a 8.3.
-  const std::string corto = normaliza(pedido);
+  const std::string corto = normalizar_nombre(pedido);
   for (const auto& ent : lista) {
-    if (ent.nombre == corto) return ent.nombre;
+    if (mismo_nombre(ent.nombre, corto)) return ent.nombre;
   }
   return pedido;
 }
@@ -260,7 +264,7 @@ bool SdCardImpl::leer_archivo(const std::string& nombre_in,
   // Se lee de la imagen en RAM, no del fichero: es lo mismo que ve la CPU y no
   // depende de que el emulador tenga el fichero abierto para escribir.
   for (const Entrada& e : listar_archivos()) {
-    if (e.nombre != nombre) continue;
+    if (!mismo_nombre(e.nombre, nombre)) continue;
     const size_t off = (size_t)e.sector * 512;
     if (off + e.bytes > img_.size()) return fallo("archivo corrupto (fuera de la imagen)");
     datos->assign(img_.begin() + (long)off, img_.begin() + (long)(off + e.bytes));
@@ -299,36 +303,52 @@ bool SdCardImpl::agregar_archivo(const std::string& nombre_in,
   const std::string nombre = normalizar_nombre(nombre_in);
   if (nombre.empty()) return fallo("nombre no valido (formato 8.3)");
 
-  // Si ya existe, se borra antes (como hace SAVE del monitor).
-  borrar_archivo(nombre, nullptr);
+  // El tamaño y los sectores son de 16 bits en la tabla MicroFS.
+  if (datos.size() > 0xFFFF) return fallo("archivo demasiado grande (max. 65535 bytes)");
 
-  // Slot libre en la tabla.
-  int slot = -1;
+  // Hueco en la tabla: el del archivo del mismo nombre (se sustituye, como hace SAVE
+  // del monitor) o el primero libre. Nada se modifica hasta saber que cabe.
+  int slot = -1, libre = -1;
   for (int i = 0; i < MAX_ENTRADAS; i++) {
-    if (img_[kTablaOffset + i * kEntradaBytes] == 0) {
-      slot = i;
-      break;
+    const uint8_t* ent = img_.data() + kTablaOffset + i * kEntradaBytes;
+    if (ent[0] == 0) {
+      if (libre < 0) libre = i;
+      continue;
+    }
+    char actual[13] = {0};
+    std::memcpy(actual, ent, 12);
+    if (mismo_nombre(actual, nombre)) slot = i;
+  }
+  const bool sustituye = slot >= 0;
+  if (!sustituye) slot = libre;
+  if (slot < 0) return fallo("tabla llena (15 archivos)");
+
+  uint32_t sectores = datos.empty() ? 1 : (uint32_t)((datos.size() + 511) / 512);
+  uint32_t inicio = get16(img_.data() + 6);
+  bool reutiliza = false;
+  if (sustituye) {
+    // Si cabe en el sitio que ya ocupaba se reutiliza: recompilar y volver a cargar el
+    // mismo programa no debe ir gastando la tarjeta.
+    const uint8_t* ent = img_.data() + kTablaOffset + slot * kEntradaBytes;
+    const uint32_t s0 = get16(ent + 12), ns = get16(ent + 16);
+    if (ns >= sectores && s0 >= 1 && (size_t)(s0 + ns) * 512 <= img_.size()) {
+      inicio = s0;
+      sectores = ns;
+      reutiliza = true;
     }
   }
-  if (slot < 0) return fallo("tabla llena (16 archivos)");
-
-  const uint32_t sectores =
-      datos.empty() ? 1 : (uint32_t)((datos.size() + 511) / 512);
-  const uint32_t inicio = get16(img_.data() + 6);
-  if (inicio + sectores > sectors_) return fallo("no cabe en la imagen");
+  if (inicio < 1 || inicio + sectores > sectors_ || inicio + sectores > 0xFFFF)
+    return fallo("no cabe en la imagen");
 
   // Datos.
   const size_t off = (size_t)inicio * 512;
-  std::memcpy(img_.data() + off, datos.data(), datos.size());
+  if (!datos.empty()) std::memcpy(img_.data() + off, datos.data(), datos.size());
   const size_t fin = off + (size_t)sectores * 512;
   std::memset(img_.data() + off + datos.size(), 0, fin - off - datos.size());
 
   // Entrada de la tabla.
   //
-  // El campo del nombre son 12 bytes. "BASE(8).EXT(3)" ocupa exactamente 12 y
-  // el monitor lo lee sin exigir NUL, así que cabe. Lo que NO se puede es
-  // escribir más de 12 ni dejar que el nombre pise el sector inicial (+12/+13):
-  // aquí se recorta a 12 por si el nombre llegara más largo.
+  // El campo del nombre son 12 bytes (11 + NUL); normalizar_nombre() ya lo garantiza.
   uint8_t* e = img_.data() + kTablaOffset + slot * kEntradaBytes;
   std::memset(e, 0, kEntradaBytes);
   const size_t n_bytes = nombre.size() < 12 ? nombre.size() : 12;
@@ -338,7 +358,7 @@ bool SdCardImpl::agregar_archivo(const std::string& nombre_in,
   put16(e + 16, (uint16_t)sectores);
 
   // Nuevo sector libre.
-  put16(img_.data() + 6, (uint16_t)(inicio + sectores));
+  if (!reutiliza) put16(img_.data() + 6, (uint16_t)(inicio + sectores));
 
   // Persistencia: tabla y datos.
   for (uint32_t s = inicio; s < inicio + sectores; s++) flush_sector(s);
@@ -366,11 +386,11 @@ bool SdCardImpl::renombrar_archivo(const std::string& viejo_in,
     char actual[13] = {0};
     std::memcpy(actual, e, 12);
     const std::string nombre(actual);
-    if (nombre == viejo) entrada = e;
-    if (nombre == nuevo && nombre != viejo) return fallo("ya existe un archivo con ese nombre");
+    const bool es_viejo = mismo_nombre(nombre, viejo);
+    if (es_viejo) entrada = e;
+    if (!es_viejo && mismo_nombre(nombre, nuevo)) return fallo("ya existe un archivo con ese nombre");
   }
   if (!entrada) return fallo("no existe");
-  if (viejo == nuevo) return true;
 
   // Se reescribe solo el campo nombre; sector y tamano no cambian.
   std::memset(entrada, 0, 12);
@@ -393,7 +413,7 @@ bool SdCardImpl::borrar_archivo(const std::string& nombre_in, std::string* error
     if (e[0] == 0) continue;
     char actual[13] = {0};
     std::memcpy(actual, e, 12);
-    if (nombre != actual) continue;
+    if (!mismo_nombre(actual, nombre)) continue;
     std::memset(e, 0, kEntradaBytes);
     flush_sector(0);
     return true;
@@ -438,7 +458,6 @@ uint8_t SdCardImpl::spi_byte(uint8_t mosi) {
       // bloque.
       if ((size_t)write_sector_ * 512 < img_.size()) {
         std::memcpy(img_.data() + (size_t)write_sector_ * 512, rbuf_.data(), 512);
-        dirty_ = true;
         // Persistir inmediatamente: si el emulador termina de forma abrupta
         // no se pierde nada, y la imagen queda usable por sd_tool.py.
         flush_sector(write_sector_);
@@ -569,10 +588,11 @@ void SdCardImpl::prepare_command(uint8_t cmd, uint32_t arg) {
 
     case 58: // READ_OCR -> R3: R1 + 4 bytes OCR
       r1_ = initialized_ok_ ? 0x00 : 0x01;
-      rbuf_.push_back(0x40);           // OCR[31] power up
+      // OCR: bit 31 = encendida, bit 30 = CCS (SDHC), bits 23:15 = 2,7-3,6 V
+      rbuf_.push_back((uint8_t)((initialized_ok_ ? 0x80 : 0x00) | (sdhc_ ? 0x40 : 0x00)));
+      rbuf_.push_back(0xFF);
+      rbuf_.push_back(0x80);
       rbuf_.push_back(0x00);
-      rbuf_.push_back(0x80);           // voltaje 3.3V
-      rbuf_.push_back(sdhc_ ? 0xFF : 0x00); // bit30 CCS
       r1_more_count_ = 4;
       break;
 
@@ -593,7 +613,7 @@ void SdCardImpl::prepare_command(uint8_t cmd, uint32_t arg) {
     case 18: { // READ_MULTIPLE_BLOCK
       if (!initialized_ok_ || img_.empty()) { r1_ = 0x04; break; }
       uint32_t sector = sdhc_ ? arg : (arg / 512);
-      if ((uint64_t)sector * 512 >= img_.size()) { r1_ = 0x40; break; }
+      if (((uint64_t)sector + 1) * 512 > img_.size()) { r1_ = 0x40; break; }
       r1_ = 0x00;
       // El driver descarta el primer byte tras el R1 (el token 0xFE) y lee los
       // 512 siguientes. No deben sobrar bytes: al segundo 512 se sale del modo
@@ -608,7 +628,7 @@ void SdCardImpl::prepare_command(uint8_t cmd, uint32_t arg) {
     case 25: { // WRITE_MULTIPLE_BLOCK
       if (!initialized_ok_ || img_.empty()) { r1_ = 0x04; break; }
       write_sector_ = sdhc_ ? arg : (arg / 512);
-      if ((uint64_t)write_sector_ * 512 >= img_.size()) { r1_ = 0x40; break; }
+      if (((uint64_t)write_sector_ + 1) * 512 > img_.size()) { r1_ = 0x40; break; }
       r1_ = 0x00;
       rbuf_.assign(512, 0xFF);
       wpos_ = 0;

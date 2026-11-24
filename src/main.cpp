@@ -85,18 +85,39 @@ static std::string pedir_imagen_windows() { return ""; }
 #include "timer.h"
 #include "uart.h"
 
-static std::vector<uint8_t> load_file(const char* path) {
+static bool load_file(const char* path, std::vector<uint8_t>* data) {
   std::ifstream f(path, std::ios::binary);
   if (!f) {
     std::fprintf(stderr, "ERROR: no se pudo abrir %s\n", path);
-    std::exit(1);
+    return false;
   }
-  f.seekg(0, std::ios::end);
-  size_t n = (size_t)f.tellg();
-  f.seekg(0, std::ios::beg);
-  std::vector<uint8_t> data(n);
-  if (n) f.read((char*)data.data(), n);
-  return data;
+  data->assign(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
+  return true;
+}
+
+// Espera corta (~1 ms) sin gastar CPU. `sleep_for` se redondea al tick de Windows; el
+// temporizador de alta resolución no. Si no está disponible, Sleep(1), que con
+// timeBeginPeriod(1) es suficiente.
+static void esperar_us(long long us) {
+  if (us <= 0) return;
+#ifdef _WIN32
+#ifndef CREATE_WAITABLE_TIMER_HIGH_RESOLUTION
+#define CREATE_WAITABLE_TIMER_HIGH_RESOLUTION 0x00000002
+#endif
+  static HANDLE h = CreateWaitableTimerExW(
+      nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
+  if (h) {
+    LARGE_INTEGER t;
+    t.QuadPart = -us * 10; // relativo, en unidades de 100 ns
+    if (SetWaitableTimer(h, &t, 0, nullptr, nullptr, FALSE)) {
+      WaitForSingleObject(h, INFINITE);
+      return;
+    }
+  }
+  Sleep(1);
+#else
+  std::this_thread::sleep_for(std::chrono::microseconds(us));
+#endif
 }
 
 int main(int argc, char** argv) {
@@ -135,7 +156,7 @@ int main(int argc, char** argv) {
       "Uso: %s <rom.bin> [puerto] [tarjeta.img] [opciones]\n"
       "  rom.bin     : binario de 16 KB de la ROM del monitor\n"
       "  puerto      : puerto TCP del UART (default 4000)\n"
-      "  tarjeta.img : imagen SD (se crea FAT16 si no existe)\n"
+      "  tarjeta.img : imagen SD (se crea MicroFS si no existe)\n"
       "\n"
       "Opciones:\n"
       "  --debug[=PUERTO]  activa el servidor HTTP de depuracion (8080 por\n"
@@ -144,10 +165,39 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  int port = 4000;
-  if (argc >= 3) port = atoi(argv[2]);
+  // Opciones (--algo) y argumentos por posición se separan: antes, sin tarjeta,
+  // `--debug` se tomaba por el nombre de la imagen SD y se creaba un archivo.
+  std::vector<std::string> pos;
+  int dbg_port = 0; // depuración HTTP: desactivada por defecto
+  if (const char* env = std::getenv("EMU_DEBUG_PORT")) dbg_port = atoi(env);
+  for (int i = 1; i < argc; i++) {
+    const std::string a = argv[i];
+    if (a.compare(0, 2, "--") != 0) {
+      pos.push_back(a);
+      continue;
+    }
+    const size_t eq = a.find('=');
+    const std::string clave = a.substr(0, eq);
+    if (clave == "--debug" || clave == "--debug-http") {
+      dbg_port = eq == std::string::npos ? 8080 : atoi(a.c_str() + eq + 1);
+    } else {
+      std::fprintf(stderr, "ERROR: opcion desconocida: %s\n", a.c_str());
+      return 1;
+    }
+  }
+  if (pos.empty()) {
+    std::fprintf(stderr, "ERROR: falta la ROM\n");
+    return 1;
+  }
+  const int port = pos.size() >= 2 ? atoi(pos[1].c_str()) : 4000;
+  if (port <= 0 || port > 65535) {
+    std::fprintf(stderr, "ERROR: puerto invalido: %s\n", pos[1].c_str());
+    return 1;
+  }
+  const bool con_sd = pos.size() >= 3;
 
-  std::vector<uint8_t> rom = load_file(argv[1]);
+  std::vector<uint8_t> rom;
+  if (!load_file(pos[0].c_str(), &rom)) return 1;
   if (rom.size() != 16384) {
     std::fprintf(stderr,
       "WARN: la ROM mide %zu bytes (se esperaban 16384); se rellena/trunca.\n",
@@ -159,13 +209,13 @@ int main(int argc, char** argv) {
 
   // Tarjeta SD emulada (opcional).
   SdCardImpl sd;
-  if (argc >= 4) {
-    if (!sd.open(argv[3], 16)) {
+  if (con_sd) {
+    if (!sd.open(pos[2], 16)) {
       std::fprintf(stderr, "No se pudo abrir/crear la imagen SD\n");
       return 1;
     }
     bus.spi()->attach(&sd);
-    std::printf("SD: %s conectada al SPI\n", argv[3]);
+    std::printf("SD: %s conectada al SPI\n", pos[2].c_str());
   }
 
   Cpu6502 cpu(bus);
@@ -211,19 +261,10 @@ int main(int argc, char** argv) {
   //
   // También se acepta el nombre anterior --debug-http[=PUERTO].
   DebugServer debug;
-  if (argc >= 4) debug.set_sdcard(&sd);  // /sdcard/* y /run con cuerpo POST
+  debug.set_sdcard(&sd);  // (responde 503 mientras no haya tarjeta montada)
+  // /sdcard/* y /run con cuerpo POST
   debug.set_cpu(&cpu);  // PC y registros en /state.txt, y /run
   {
-    int dbg_port = 0; // desactivado por defecto
-    if (const char* env = std::getenv("EMU_DEBUG_PORT")) dbg_port = atoi(env);
-    for (int i = 1; i < argc; i++) {
-      const char* a = argv[i];
-      if (std::strncmp(a, "--debug", 7) == 0) {
-        dbg_port = 8080;
-        const char* eq = std::strchr(a, '=');
-        if (eq) dbg_port = atoi(eq + 1);
-      }
-    }
     if (dbg_port > 0) {
       if (!debug.start(dbg_port, bus)) {
         std::fprintf(stderr, "Aviso: no se pudo abrir la depuracion HTTP en el puerto %d\n",
@@ -235,6 +276,7 @@ int main(int argc, char** argv) {
   // Inicializar audio (opcional: si falla, el emulador sigue funcionando).
   AudioOutput audio;
   audio.start(48000, 80);
+  std::vector<int16_t> muestras;
 
   // Ventana: vídeo del Core de Vídeo + los 6 LEDs del Tang Nano 9K.
   EmuWindow window;
@@ -275,18 +317,14 @@ int main(int argc, char** argv) {
       return;
     }
     if (accion == "reset_cpu") {
-      // RESET de la maquina, igual que el comando `Q` del monitor, pero desde el
-      // raton: sirve cuando el programa en marcha se cuelga o entra en un bucle
-      // que no lee el UART, y entonces no hay forma de teclear `Q`.
-      //
-      // Se vacia tambien la FIFO de entrada: lo que hubiera pendiente se envio
-      // al programa anterior y no debe ejecutarse como comandos del monitor.
-      // El resto de perifericos (SD, video, SID) NO se reinician: en el
-      // hardware, `Q` tambien es solo un reset de la CPU.
+      // Botón de reset de la placa (S1): CPU y periféricos. Sirve cuando el programa
+      // se cuelga o no lee el UART. La RAM, el OAM, las paletas y el flag de $C004 se
+      // conservan, como en el hardware. También descarta lo pendiente de entrada.
+      bus.reset_placa();
       cpu.reset();
-      uart.reset_rx();
+      debug.cancelar_comandos();
       comando_diferido.clear();
-      std::printf("RESET: CPU reiniciada\n");
+      std::printf("RESET: placa reiniciada\n");
       return;
     }
     if (accion == "remount") {
@@ -306,9 +344,9 @@ int main(int argc, char** argv) {
       // boton anterior ya lanzó un juego, la CPU esta ejecutando ese programa y
       // el nuevo LOAD se queda en la FIFO del UART sin que nadie lo lea (los
       // juegos no leen del UART). Al reiniciar se vuelve al monitor.
-      //   - `cpu.reset()` hace lo mismo que el comando `Q` del monitor.
-      //   - `uart.reset_rx()` descarta lo que quedara pendiente: si no, los
-      //     comandos viejos llegarian de golpe al monitor nuevo.
+      //   - `bus.reset_placa()` reinicia los periféricos y descarta la entrada
+      //     pendiente del UART.
+      //   - `cpu.reset()` vuelve al monitor.
       //
       // El monitor necesita tiempo para procesar el LOAD (lee el archivo por la
       // SD y lo copia a RAM), asi que el `R` no puede ir detras en el mismo
@@ -341,8 +379,9 @@ int main(int argc, char** argv) {
       char dir_txt[8];
       std::snprintf(dir_txt, sizeof dir_txt, "%04X", dirv);
 
+      bus.reset_placa();
       cpu.reset();
-      uart.reset_rx();
+      debug.cancelar_comandos();
       comando_diferido.clear();
       const std::string cmd = "LOAD " + nombre + " " + dir_txt + "\r";
       for (char c : cmd) uart.enqueue_rx((uint8_t)(unsigned char)c);
@@ -355,7 +394,8 @@ int main(int argc, char** argv) {
       // Diálogo nativo de Windows (si no hay, no se hace nada).
       std::string ruta = pedir_archivo_windows();
       if (ruta.empty()) return;
-      std::vector<uint8_t> datos = load_file(ruta.c_str());
+      std::vector<uint8_t> datos;
+      if (!load_file(ruta.c_str(), &datos)) return;
       // Nombre: el del archivo, sin ruta.
       std::string nombre = ruta;
       const size_t barra = nombre.find_last_of("\\/");
@@ -392,6 +432,7 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "SD: no se pudo montar %s\n", ruta.c_str());
         return;
       }
+      bus.spi()->attach(&sd); // por si se arrancó sin tarjeta
       std::printf("SD: %s montada en caliente\n", ruta.c_str());
       std::vector<EmuWindow::ArchivoSd> lista;
       for (const auto& e : sd.listar_archivos()) lista.push_back({e.nombre, e.bytes});
@@ -438,7 +479,7 @@ int main(int argc, char** argv) {
 
   window.start(Video::W, Video::H, 3, /*terminal=*/true);
   // Listado inicial del módulo SD del panel.
-  if (argc >= 4) {
+  if (con_sd) {
     std::vector<EmuWindow::ArchivoSd> lista;
     for (const auto& e : sd.listar_archivos()) lista.push_back({e.nombre, e.bytes});
     window.set_listado_sd(std::move(lista));
@@ -446,14 +487,7 @@ int main(int argc, char** argv) {
   uint32_t* framebuffer = new uint32_t[Video::W * Video::H];
   auto proximo_frame = std::chrono::steady_clock::now();  // refresco de ventana
 
-  // Reloj del SID: en el FPGA es clk_1mhz (~1 MHz) y reSIDfp lo asume a
-  // 985248 Hz. El SID avanza en proporción exacta a los ciclos de CPU.
   const double cpu_hz = 3375000.0;   // 6.75 MHz / 2
-  const double sid_hz = 964285.714;   // 27 MHz / 28 (clk_1mhz del FPGA)
-  const double cp_per_sid = cpu_hz / sid_hz;
-
-  int16_t audio_buf[4096];
-  double sid_accum = 0.0;   // ciclos de SID pendientes de generar
 
   // Colchón del anillo de audio: cuánto sonido se adelanta al vídeo. Es la
   // latencia AUDIO->oído menos lo que ya tenga guardado el driver. 25 ms es
@@ -465,7 +499,7 @@ int main(int argc, char** argv) {
   // para analizar glitches sin depender del oído ni del dispositivo de audio.
   const char* wav_path = std::getenv("EMU_WAV");
   FILE* wav = nullptr;
-  unsigned long wav_samples = 0;  // solo para la cabecera del WAV
+  unsigned long wav_samples = 0;  // para la cabecera del WAV
   if (wav_path) {
     wav = std::fopen(wav_path, "wb");
     if (wav) {
@@ -497,7 +531,7 @@ int main(int argc, char** argv) {
   auto t0 = clock::now();
   long long cycles_done = 0;   // ciclos de CPU ejecutados desde t0
   const long long cycles_per_ms = (long long)(cpu_hz / 1000.0);
-  const long long max_lag_cycles = (long long)(cpu_hz * 0.050); // 50 ms de retraso máx.
+  const long long max_lag_cycles = (long long)(cpu_hz * 0.250); // retraso máximo recuperable
   double worst_sleep_ms = 0.0;
   double worst_gap_at = 0.0;
   clock::time_point last_loop = clock::now();
@@ -546,6 +580,7 @@ int main(int argc, char** argv) {
   // El bucle da ~20 000 vueltas por segundo (duerme 50 us cuando va al día), y
   // llamar a poll() en todas ellas acababa desbordando la pila del proceso al
   // recibir peticiones seguidas. A 50 Hz sobra para un cliente HTTP.
+  uint32_t version_term = 0; // última versión del terminal enviada a la ventana
   auto next_debug_poll = clock::now();
 
   // Bucle principal.
@@ -570,130 +605,52 @@ int main(int argc, char** argv) {
     auto elapsed = duration_cast<microseconds>(clock::now() - t0).count();
     long long target = elapsed * (long long)cpu_hz / 1000000LL;
 
-    // Si nos hemos quedado muy atrás (p. ej. el SO robó el hilo durante mucho
-    // tiempo), se ejecuta de más hasta recuperar el ritmo, NUNCA se pierde
-    // tiempo emulado: resincronizar hacia atrás hacía que el player (1918)
-    // fuera un 5 % lento, con tirones visibles en la música.
-    //
-    // El tiempo descartado aquí no se emula (la CPU no lo ejecuta), pero su
-    // audio SÍ se genera: si no, esos milisegundos se convierten en silencio y
-    // el sonido se va separando del vídeo. Con tirones de ~90 ms se acumulaba
-    // casi un segundo de desfase.
-    long long saltados = 0;
-    if (target - cycles_done > max_lag_cycles) {
-      saltados = target - cycles_done;
-      cycles_done = target; // al día: sin atraso pendiente
+    // Un retraso normal (hasta 250 ms) se recupera ejecutando más deprisa: la CPU
+    // emulada corre decenas de veces más rápido que el tiempo real. Uno mayor (un
+    // diálogo, el portátil suspendido) se descarta moviendo el origen de tiempos: la
+    // máquina se queda congelada ese rato, entera (CPU, vídeo, timer y SID a la vez).
+    const long long atraso = target - cycles_done;
+    if (atraso > max_lag_cycles) {
+      t0 += microseconds(atraso * 1000000LL / (long long)cpu_hz);
+      continue;
     }
 
-    long long to_run = target - cycles_done;
-
-    // Con `to_run` de pocos ciclos (decenas), ejecutar y volver a girar sale
-    // carisimo: el bucle acababa dando 118000 vueltas/s al 100 % de CPU, y al
-    // estar saturado el SO lo desaloja (huecos de 90 ms) y el audio se queda
-    // sin datos. Cuando queda menos de ~1 ms de trabajo se duerme ese resto.
-    //
-    // El umbral es 1 ms (no 0,25) a proposito: `sleep_for` de unos cientos de
-    // microsegundos lo redondea el planificador de Windows al siguiente tick y
-    // se convierte en una espera de decenas de milisegundos. Con --debug el
-    // bucle hace mas vueltas y cae muchas veces en esta rama, y esos huecos se
-    // veian como tirones en los juegos. Con menos de 1 ms se cede el turno sin
-    // dormir, que no tiene esa penalizacion.
-    if (to_run <= 0 || to_run < cycles_per_ms) {
-      const long long falta_us = to_run > 0 ? to_run * 1000000LL / (long long)cpu_hz : 0;
-      const long long dormir = falta_us - 200; // despertar un poco antes
+    // Bloques de 1 ms. Si aún no toca, se duerme lo que falta.
+    const long long to_run = atraso;
+    if (to_run < cycles_per_ms) {
       const auto ws = clock::now();
-      if (dormir > 1000) {
-        std::this_thread::sleep_for(std::chrono::microseconds(dormir));
-      } else {
-        std::this_thread::yield();
-      }
+      esperar_us((cycles_per_ms - to_run) * 1000000LL / (long long)cpu_hz);
       const double slept =
           std::chrono::duration<double, std::milli>(clock::now() - ws).count();
       if (slept > worst_sleep_ms) worst_sleep_ms = slept;
       continue;
     }
 
-    // Generar el audio del SID ANTES de ejecutar la CPU de esta vuelta.
-    //
-    // Antes se hacía después, y eso metía el sonido un bloque por detrás del
-    // vídeo: el juego avanzaba 2 ms y solo entonces se generaba el audio de ese
-    // intervalo. Con el bucle en rachas el retraso se acumulaba y se oía un
-    // desfase de cerca de un segundo.
-    //
-    // El colchón del anillo (AUDIO_TARGET_MS) decide el resto de la latencia:
-    // es lo que se adelanta el audio para que un tropiezo del hilo no lo deje
-    // mudo. Se mantiene corto pero suficiente.
-    if (audio.active()) {
-      auto t_aud0 = clock::now();
-
-      // El SID avanza EXACTAMENTE con la CPU: tantos ciclos de SID como ciclos de
-      // CPU se han emulado. Así el sonido y la imagen van al mismo ritmo y no se
-      // desfasan con el tiempo (antes se ajustaba al nivel del buffer, y eso
-      // metía error en el tempo).
-      //
-      // El factor `cycle_correction()` compensa que reSIDfp entrega un 0,11 %
-      // más de muestras de las que consume el dispositivo; sin él, el anillo se
-      // llena y el audio se queda sin datos a ratos.
-      sid_accum += (double)(to_run + saltados) / cp_per_sid * Sid::cycle_correction();
-      int want = (int)sid_accum;
-      sid_accum -= want;
-
-      // Control del colchón. El nivel lo mantienen estas reglas:
-      //  - Si va sobrado mucho (p. ej. tras un parón): no generar nada hasta
-      //    que baje al objetivo. Sin esto el colchón nunca baja y el sonido se
-      //    queda retrasado para siempre.
-      //  - Si va justo: generar un poco de más (1 ms como mucho) para volver al
-      //    objetivo sin que se note.
-      const long objetivo = (long)(audio.frequency() * AUDIO_TARGET_MS / 1000);
-      const long nivel = (long)audio.fill();
-      if (nivel > objetivo + (long)(audio.frequency() * 5 / 1000)) {
-        want = 0; // sobra más de 5 ms: dejar que se vacíe
-      } else {
-        const long deficit = objetivo - nivel;
-        if (deficit > 0) {
-          // Cuánto audio falta para llenar el colchón, en muestras.
-          //
-          // Antes se sumaba como máximo 1 ms por vuelta, pero el bucle solo da
-          // ~500 vueltas/s (cada una emula ~2 ms de CPU): se generaba como
-          // mucho la MITAD del audio que consume el dispositivo, y el resto
-          // eran underruns (silencio intermitente y sonido a tirones).
-          // El límite por vuelta debe cubrir el déficit completo; lo que evita
-          // pasarse de largo es la comprobación de "sobra más de 5 ms" de
-          // arriba, no este tope.
-          want += (int)deficit;
-        }
-      }
-
-      while (want > 0) {
-        const int chunk = std::min(want, 512);
-        const int n = bus.sid()->clock(chunk, audio_buf, 4096);
-        if (n > 0) {
-          audio.push(audio_buf, n);
-          if (wav) {
-            std::fwrite(audio_buf, sizeof(int16_t), (size_t)n, wav);
-            wav_samples += (unsigned long)n;
-          }
-        }
-        want -= chunk;
-      }
-      aud_ms = std::chrono::duration<double, std::milli>(clock::now() - t_aud0).count();
-    }
-
-    // Ejecutar los ciclos que faltan (bloques de ~2 ms como máximo, para que
-    // server.poll() atienda al socket con regularidad).
-    long long blocked = to_run > cycles_per_ms ? cycles_per_ms : to_run;
+    const long long blocked = cycles_per_ms;
     auto t_cpu0 = clock::now();
     long executed = 0;
     while (executed < blocked) {
       cpu.step();
       executed += cpu.last_cycles();
+      // Todos los periféricos avanzan con cada instrucción.
+      bus.tick((uint32_t)cpu.last_cycles());
     }
     auto t_cpu1 = clock::now();
     cycles_done += executed;
 
-    // Avanzar los periféricos con los ciclos de CPU realmente transcurridos.
-    uart.tick((uint32_t)executed);
-    bus.timer()->tick((uint32_t)executed);
+    // Audio de este bloque: el SID ya va al ritmo de la CPU.
+    {
+      const auto t_aud0 = clock::now();
+      bus.sid()->sacar_audio(muestras);
+      if (audio.active())
+        audio.push_sincronizado(muestras,
+                                (size_t)(audio.frequency() * AUDIO_TARGET_MS / 1000));
+      if (wav && !muestras.empty()) {
+        std::fwrite(muestras.data(), sizeof(int16_t), muestras.size(), wav);
+        wav_samples += (unsigned long)muestras.size();
+      }
+      aud_ms = std::chrono::duration<double, std::milli>(clock::now() - t_aud0).count();
+    }
 
     // Segundo comando del boton LOAD ("R 0800"): se manda cuando el monitor ha
     // tenido tiempo de procesar el LOAD. 800 ms cubren el arranque del monitor
@@ -719,33 +676,17 @@ int main(int argc, char** argv) {
       }
     }
 
-    // VBLANK del Core de Video, atado al reloj de pared.
-    //
-    // Se calcula cuántas líneas de barrido TOCAN desde el arranque (no cuántas
-    // han pasado desde la vuelta anterior): así un retraso puntual del hilo no
-    // se acumula en la siguiente vuelta y la frecuencia de frames queda exacta.
-    // El barrido del hardware es 858 x 525 a 27 MHz: 525 líneas por frame.
-    {
-      const long long us_desde_inicio =
-          duration_cast<microseconds>(clock::now() - t0).count();
-      // 1 línea = 858 píxeles a 27 MHz = 31,777 µs, es decir
-      // 31,468 líneas por milisegundo. Con enteros: us * 27000 / 858 da
-      // milésimas de línea; se divide entre 1000 para quedarse con la línea.
-      const long long lineas_tocan = (us_desde_inicio * 27000LL) / 858LL / 1000LL;
-      bus.video()->sync_scanlines(lineas_tocan);
-    }
+    if (window.active() && !window.poll()) break; // el usuario cerro la ventana
 
-    if (window.active()) {
-      if (!window.poll()) break; // el usuario cerro la ventana
+    // Joystick y pulsadores: se combinan la ventana (teclado/mando) y la API HTTP. Los
+    // bits son activos en bajo, asi que combinar es un AND. Sin ventana queda solo HTTP.
+    debug.tick_joy(DebugServer::ms_ahora());
+    bus.gpio()->set_joy((uint8_t)(window.joy() & debug.joy_http()));
+    bus.gpio()->set_botones((uint8_t)(window.botones() & debug.botones_http()));
+    window.set_botones_panel(bus.gpio()->botones());
 
-      // Joystick: se combinan la ventana (teclado/mando) y la API HTTP. Los
-      // bits son activos en bajo, asi que combinar es un AND: el boton queda
-      // pulsado si lo aprieta cualquiera de los dos. El estado de la ventana
-      // se recalcula en cada vuelta y pisaria al de la API si se escribiera
-      // tal cual, de ahi la combinacion.
-      debug.tick_joy(DebugServer::ms_ahora());
-      bus.gpio()->set_joy((uint8_t)(window.joy() & debug.joy_http()));
-
+    // Sin ventana se dibuja igual si hay depuracion: /screen.png lo necesita.
+    if (window.active() || debug.active()) {
       // Dibujar a ~60 Hz (el vídeo es de 320x240; no hace falta más).
       const auto ahora = clock::now();
       if (ahora >= proximo_frame) {
@@ -761,8 +702,12 @@ int main(int argc, char** argv) {
         if (proximo_frame < minimo) proximo_frame = minimo;
         const auto t_draw0 = clock::now();
         bus.video()->render(framebuffer);
+        if (!window.active()) continue;
         const double render_ms = std::chrono::duration<double, std::milli>(clock::now() - t_draw0).count();
-        if (window.has_terminal()) window.set_terminal(uart.terminal());
+        if (window.has_terminal() && version_term != uart.version_terminal()) {
+          version_term = uart.version_terminal();
+          window.set_terminal(uart.terminal());
+        }
         // Pines del puerto 1 tal como los lee la CPU (mismo dato que /state.txt).
         window.set_port1(bus.gpio()->port1_read(), bus.gpio()->dir1());
         const auto t_pres0 = clock::now();
@@ -851,6 +796,16 @@ int main(int argc, char** argv) {
     }
   }
 
+  if (wav) {
+    // Cerrar la cabecera con los tamaños reales.
+    const uint32_t datos = (uint32_t)(wav_samples * 2), riff = datos + 36;
+    std::fseek(wav, 4, SEEK_SET);
+    std::fwrite(&riff, 4, 1, wav);
+    std::fseek(wav, 40, SEEK_SET);
+    std::fwrite(&datos, 4, 1, wav);
+    std::fclose(wav);
+  }
+  audio.stop();
   delete[] framebuffer;
   // Cerrar el hilo de diagnóstico: primero se le avisa y se espera a que vuelque
   // lo que quede en la cola.

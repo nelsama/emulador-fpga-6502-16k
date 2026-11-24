@@ -4,12 +4,15 @@
 
 #include "device.h"
 
-// Puertos GPIO ($C000-$C004), fieles al Board.vhd.
+// Puertos GPIO ($C000-$C005), fieles al Board.vhd.
 //   $C000 = Puerto 1 (datos, bidireccional)   -> joystick Atari (DB9)
 //   $C001 = Puerto 2 (datos, bidireccional)   -> 6 LEDs del Tang Nano 9K
 //   $C002 = Config Puerto 1 (0=salida, 1=entrada por bit)
 //   $C003 = Config Puerto 2 (0=salida, 1=entrada por bit)
 //   $C004 = Flag de usuario persistente (bit 0, R/W; resto de bits = 0)
+//   $C005 = Pulsadores (R): bit 0 = BTN_A (pin 86), bit 1 = BTN_B (pin 85),
+//           activos en bajo; bits 7-2 = 0. Sin antirrebote en el hardware (el
+//           emulador no simula rebotes).
 //
 // El flag de $C004 es un unico flip-flop en el FPGA que NO esta conectado al
 // reset del sistema: sobrevive a un reset por S1 y solo se pierde al recargar
@@ -19,7 +22,8 @@
 //
 // Igual que en el VHDL (port_sync): un bit configurado como SALIDA devuelve el
 // valor escrito; uno configurado como ENTRADA devuelve lo que haya en el pin.
-// Al arrancar, dir1_/dir2_ valen 0, así que ambos puertos son de salida.
+// Al arrancar (y tras el reset) los cuatro registros valen $FF: ambos puertos son
+// de ENTRADA (register_8bit.vhd).
 //
 // Los LEDs están en el puerto 2 y son ACTIVOS EN BAJO: un bit a 0 enciende el
 // LED correspondiente.
@@ -55,10 +59,17 @@ public:
   static constexpr uint8_t JOY_MASK  = 0xF8;
   static constexpr uint8_t JOY_IDLE  = 0xF8; // sin pulsar (activo en bajo)
 
+  // Pulsadores de $C005.
+  static constexpr uint8_t BTN_A = 0x01;
+  static constexpr uint8_t BTN_B = 0x02;
+  static constexpr uint8_t BTN_IDLE = 0x03; // sin pulsar (activo en bajo)
+  uint8_t botones() const { return botones_; }
+  void set_botones(uint8_t v) { botones_ = (uint8_t)(v & BTN_IDLE); }
+
   // Estado de los 6 LEDs (bit N = 1 -> LED N encendido), ya interpretando la
   // lógica activa en bajo del hardware. Se toman del registro de salida del
-  // puerto 2, que es lo que escriben los programas ($C001).
-  uint8_t leds() const { return (uint8_t)(~port2_out_ & 0x3F); }
+  // puerto 2 ($C001); un bit configurado como entrada deja su LED apagado.
+  uint8_t leds() const { return (uint8_t)(~(port2_out_ | dir2_) & 0x3F); }
 
   // Bits configurados como entrada en cada puerto (1 = entrada).
   uint8_t dir1() const { return dir1_; }
@@ -71,7 +82,7 @@ public:
   bool flag_usuario() const { return flag_user_; }
   // Simula el reset por boton S1: NO toca el flag de usuario, igual que en el
   // FPGA (ese flip-flop no esta en el dominio del reset del sistema).
-  void reset_placa() {}
+  void reset_placa() { port1_out_ = port2_out_ = dir1_ = dir2_ = 0xFF; }
 
   // Lo que devuelve la CPU al leer $C000/$C001: cada bit es el pin si está
   // configurado como entrada, o el registro de salida si es salida.
@@ -93,9 +104,10 @@ public:
 private:
   uint8_t port1_ = JOY_IDLE; // pines del puerto 1 (activo bajo)
   uint8_t port2_ = 0xFF;     // pines del puerto 2 (los LEDs no se leen)
-  uint8_t port1_out_ = 0;    // registro de salida del puerto 1
-  uint8_t port2_out_ = 0;    // registro de salida del puerto 2
-  uint8_t dir1_  = 0;        // 1 = entrada
-  uint8_t dir2_  = 0;
+  uint8_t port1_out_ = 0xFF;    // registro de salida del puerto 1
+  uint8_t port2_out_ = 0xFF;    // registro de salida del puerto 2
+  uint8_t dir1_  = 0xFF;        // 1 = entrada
+  uint8_t dir2_  = 0xFF;
+  uint8_t botones_ = BTN_IDLE; // $C005
   bool    flag_user_ = false; // $C004 bit0: sobrevive al reset del sistema
 };

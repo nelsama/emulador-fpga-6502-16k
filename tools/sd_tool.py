@@ -6,7 +6,7 @@ contiene la tabla de archivos MicroFS:
 
     offset 0-1    : magic "FM" (0x46 0x4D)
     offset 6-7    : siguiente sector libre (little-endian)
-    offset 16+    : 16 entradas de 32 bytes
+    offset 16+    : 15 entradas de 32 bytes
                       +0..11  nombre (ASCII, terminado en NUL)
                       +12..13 sector inicial (LE)
                       +14..15 tamano en bytes (LE)
@@ -33,7 +33,7 @@ import struct
 import sys
 
 SECTOR = 512
-MAX_FILES = 16
+MAX_FILES = 15  # la 16a entrada se saldria del sector 0
 ENTRY_SIZE = 32
 ENTRY_BASE = 16
 MAGIC = b"FM"

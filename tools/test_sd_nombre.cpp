@@ -48,8 +48,8 @@ int main() {
   }
 
   caso(sd, "PACMAN.BIN", "PACMAN.BIN");            // cabe: igual
-  caso(sd, "RIVERRIVER.BIN", "RIVERRIV.BIN");      // base de 10 -> 8
-  caso(sd, "MUYLARGO.NOMBREBIN", "MUYLARGO.NOM");  // extensión de 9 -> 3
+  caso(sd, "RIVERRIVER.BIN", "RIVERRIV.BI");      // base de 10 -> 8
+  caso(sd, "MUYLARGO.NOMBREBIN", "MUYLARGO.NO");  // extensión de 9 -> 3
   caso(sd, "corto.bin", "CORTO.BIN");              // pasa a mayúsculas
   caso(sd, "sin_extension_larga", "SIN_EXTE");     // sin extensión, base larga
   caso(sd, "A.B", "A.B");

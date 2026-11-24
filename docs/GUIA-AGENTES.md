@@ -174,6 +174,7 @@ debería cerrar con `shutdown(SHUT_WR)`.
 |---|---|
 | **`POST /run?name=X.BIN&addr=0800`** | **Reinicia, carga y ejecuta en un paso** (cuerpo = binario). Es el equivalente del botón RUN |
 | **`/joy?press=left,fire&hold=200`** | **Pulsa el joystick** sin tocar el UART. `release=1` suelta todo |
+| **`/btn?press=a,b&hold=200`** | **Pulsa BTN_A/BTN_B** (`$C005`). `release=1` los suelta |
 | `/console.txt` | **Lo más útil** para programas de texto: la pantalla de 80×24 en texto plano |
 | `/console.png` | Captura de la consola con colores (640×384), `?scale=2..4` |
 | `/sdcard/ls` | Archivos de la SD y espacio libre |
@@ -432,11 +433,10 @@ la tarjeta o el nombre del fichero: **no es el código**.
   ratón ni consultas de estado del cursor.
 - La consola es **80×24 fija** (con scrollback interno), no redimensionable por
   el programa.
-- Los sprites **no** se pintan en orden sobreponiendo unos a otros: el core usa
-  un line buffer de 8 entradas y **gana el índice menor de OAM**; el 9º sprite de
-  una línea **no se dibuja** (solo sube `OVERFLOW`). Si un sprite "se ve a través"
-  de otro, el arte está mal ordenado en el OAM, no es un fallo del emulador.
-  Detalle en `GUIA-USO.md` §9 «Sprites: gana el índice menor».
+- Los sprites **no** se pintan en orden: en cada píxel gana el **opaco de menor
+  índice** de OAM y a través de su color 0 se ve el siguiente. Caben **12 por línea**;
+  del 13º en adelante no se dibujan. `OVERFLOW` se activa al llegar a 12 y en VBLANK
+  solo informa de la línea 239. Detalle en `GUIA-USO.md` §9 «Sprites».
 
 ---
 
@@ -447,7 +447,8 @@ ve bien aquí y mal en la placa, mira primero esto.
 
 | Zona | Tras el arranque |
 |---|---|
-| Tilemap y atributos | a cero |
+| Tilemap | `$20` (espacio); tras un setup, a cero |
+| Atributos | a cero |
 | Patrones de **fondo** 0–7 | 8 tiles de demo |
 | Patrones de **fondo** `$20`–`$7F` | **fuente ASCII** |
 | Patrones de **sprite 0–2** | formas de demo: cara, rombo y X |

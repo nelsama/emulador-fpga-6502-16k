@@ -43,7 +43,8 @@ public:
     uint32_t sectores = 0;
   };
 
-  static constexpr int MAX_ENTRADAS = 16;
+  // 15: la 16a (bytes 496-527) se saldria del sector y pisaria el primer archivo.
+  static constexpr int MAX_ENTRADAS = 15;
 
   bool agregar_archivo(const std::string& nombre, const std::vector<uint8_t>& datos,
                        std::string* error = nullptr);
@@ -52,10 +53,8 @@ public:
   bool renombrar_archivo(const std::string& viejo, const std::string& nuevo,
                          std::string* error = nullptr);
   std::vector<Entrada> listar_archivos() const;
-  // Nombre real en la tabla para un nombre pedido: si no está tal cual, busca
-  // uno cuya base coincide (el recorte a 8.3 deja `MIPRUEBA.BIN` como
-  // `MIPRUEBA.BI`, y el monitor solo conoce el corto). Devuelve `pedido` si no
-  // hay ninguno.
+  // Nombre real en la tabla para un nombre pedido (el recorte a 11 caracteres deja
+  // `MIPRUEBA.BIN` como `MIPRUEBA.BI`). Devuelve `pedido` si no hay ninguno.
   std::string resolver_nombre(const std::string& pedido) const;
   // Lee el contenido de un archivo de la imagen (para verificarlo por HTTP).
   // Devuelve false si no está montada o el archivo no existe.
@@ -76,6 +75,9 @@ public:
     r1_pending_ = false;
     r1_more_count_ = 0;
     data_resp_pending_ = false;
+    token_seen_ = false;
+    write_busy_ = false;
+    write_crc_left_ = 0;
     rbuf_.clear();
     rpos_ = 0;
   }

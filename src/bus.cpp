@@ -63,11 +63,20 @@ uint8_t Bus::read_rom_vector(uint16_t addr) {
   return ram_rom_->read(rom_addr, resp);
 }
 
-bool Bus::irq_asserted() const {
-  // Replica: irq_combined <= not (i2c_irq or uart_irq or timer_irq or spi_irq)
-  // En el VHDL cada *_irq es '1' = inactivo, '0' = IRQ pedida. Aquí uart.irq()
-  // devuelve true cuando pide interrupción, así que:
-  //   irq_asserted (línea baja = pide IRQ)  <=>  algún módulo pide IRQ
-  bool any = uart_ ? uart_->irq() : false;
-  return any;
+bool Bus::irq_asserted() const { return uart_->irq() || timer_->irq(); }
+
+void Bus::tick(uint32_t cpu_cycles) {
+  uart_->tick(cpu_cycles);
+  timer_->tick(cpu_cycles);
+  sid_->tick(cpu_cycles);
+  video_->tick_cpu(cpu_cycles);
+}
+
+void Bus::reset_placa() {
+  uart_->reset_placa();
+  timer_->reset();
+  spi_->reset();
+  gpio_->reset_placa();
+  sid_->reset();
+  video_->reset_placa();
 }

@@ -99,6 +99,13 @@ public:
 
   // Estado actual del joystick en el formato del puerto 1 (activo en bajo).
   uint8_t joy() const { return joy_; }
+  // Pulsadores de $C005 (activos en bajo): F1/Back = BTN_A, F2/Start = BTN_B, y
+  // los botones A y B del panel (clic = pulsar, clic derecho = dejar fijado).
+  uint8_t botones() const { 
+    return (uint8_t)(btn_teclado_ & btn_mando_ & btn_raton_ & btn_fijado_);
+  }
+  // Lo que lee la CPU en $C005 (incluye HTTP), para pintar los botones del panel.
+  void set_botones_panel(uint8_t v) { btn_panel_ = v; }
 
   // --- Menú SD ---------------------------------------------------------
   //
@@ -273,4 +280,11 @@ private:
   // la otra (ver la nota en emu_window.cpp).
   uint8_t joy_teclado_ = 0xF8;
   uint8_t joy_mando_ = 0xF8;
+  uint8_t btn_teclado_ = 0x03;
+  uint8_t btn_mando_ = 0x03;
+  uint8_t btn_raton_ = 0x03;  // mientras se mantiene el clic
+  uint8_t btn_fijado_ = 0x03; // fijados con el clic derecho
+  uint8_t btn_panel_ = 0x03;
+  uint8_t boton_en(int x, int y) const; // máscara del botón bajo el ratón (0 = ninguno)
+  void dibujar_botones(void* renderer);
 };

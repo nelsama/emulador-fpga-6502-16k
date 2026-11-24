@@ -57,6 +57,7 @@ public:
     std::string cmd;
   };
   void programar_comando(long long cuando, std::string cmd);
+  void cancelar_comandos() { diferidos_.clear(); }
   bool hay_comandos_pendientes() const { return !diferidos_.empty(); }
   // Saca el primero cuyo plazo ya venció. Devuelve false si no hay ninguno.
   bool tomar_comando_vencido(long long ahora, std::string* cmd);
@@ -84,6 +85,18 @@ public:
   // Suelta las pulsaciones cuyo plazo venció. Lo llama el bucle principal.
   void tick_joy(long long ahora_ms) {
     if (joy_soltar_ && ahora_ms >= joy_soltar_) soltar_joy();
+    if (btn_soltar_ && ahora_ms >= btn_soltar_) soltar_botones();
+  }
+
+  // Pulsadores de $C005 por HTTP (`/btn?press=a,b&hold=200`), activos en bajo.
+  uint8_t botones_http() const { return btn_bits_; }
+  void pulsar_botones(uint8_t bits, long long hasta_ms) {
+    btn_bits_ = (uint8_t)(btn_bits_ & (uint8_t)~bits);
+    btn_soltar_ = hasta_ms;
+  }
+  void soltar_botones() {
+    btn_bits_ = 0x03;
+    btn_soltar_ = 0;
   }
 
 private:
@@ -123,5 +136,7 @@ private:
   std::vector<std::unique_ptr<Conn>> conns_;
   std::vector<ComandoDiferido> diferidos_;  // ver programar_comando()
   uint8_t joy_bits_ = 0xF8;   // puerto 1 vía HTTP (activo en bajo)
+  uint8_t btn_bits_ = 0x03;   // $C005 vía HTTP (activo en bajo)
+  long long btn_soltar_ = 0;
   long long joy_soltar_ = 0;  // instante en que se sueltan las pulsaciones
 };

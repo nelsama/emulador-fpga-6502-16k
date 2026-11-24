@@ -1,7 +1,21 @@
 #include "cpu_6502.h"
 
+#include <cstdio>
+
 #include "bus.h"
 #include "cpu_cycles.h"
+#include "cpu_opcodes.h"
+
+// Réplica funcional de cpu65xx_fast.vhd (6510 NMOS, con opcodes ilegales y modo
+// decimal). Los ciclos son los del núcleo, incluidos los de rama tomada y cruce de
+// página. Las instrucciones de lectura-modificación-escritura solo escriben el
+// valor final: los periféricos del FPGA detectan la escritura por flanco, así que
+// la doble escritura del 6502 cuenta como una.
+
+namespace {
+constexpr uint8_t FC = 0x01, FZ = 0x02, FI = 0x04, FD = 0x08, FB = 0x10, F1 = 0x20,
+                  FV = 0x40, FN = 0x80;
+}
 
 Cpu6502::Cpu6502(Bus& bus) : bus_(bus) {}
 
@@ -9,311 +23,323 @@ uint8_t Cpu6502::read(uint16_t addr) { return bus_.read(addr); }
 void    Cpu6502::write(uint16_t addr, uint8_t v) { bus_.write(addr, v); }
 
 uint16_t Cpu6502::read16(uint16_t addr) {
-  // Little-endian (el 6502 es little-endian).
-  uint8_t lo = read(addr);
-  uint8_t hi = read(addr + 1);
-  return (uint16_t)(lo | (hi << 8));
+  const uint8_t lo = read(addr);
+  return (uint16_t)(lo | (read((uint16_t)(addr + 1)) << 8));
+}
+
+void Cpu6502::push(uint8_t v) { write((uint16_t)(0x0100 | sp_--), v); }
+uint8_t Cpu6502::pop() { return read((uint16_t)(0x0100 | ++sp_)); }
+
+void Cpu6502::set_flag(uint8_t f, bool on) {
+  if (on) sr_ |= f; else sr_ &= (uint8_t)~f;
 }
 
 void Cpu6502::set_z_n(uint8_t v) {
-  if (v == 0) sr_ |= 0x02;  else sr_ &= ~0x02; // Z
-  if (v & 0x80) sr_ |= 0x80; else sr_ &= ~0x80; // N
-}
-
-void Cpu6502::set_carry(bool c) {
-  if (c) sr_ |= 0x01; else sr_ &= ~0x01; // C
+  set_flag(FZ, v == 0);
+  set_flag(FN, (v & 0x80) != 0);
 }
 
 void Cpu6502::reset() {
   // El vector de RESET está en $FFFC-$FFFD (que mapea a ROM $BFFC-$BFFD).
   pc_ = read16(0xFFFC);
   sp_ = 0xFD;
-  sr_ = 0x24; // bit5 = 1 (unused), bit2 = 1 (I)
+  sr_ = F1 | FI;
+  i_muestreado_ = true;
+  jam_ = false;
   a_ = x_ = y_ = 0;
   ciclos_totales_ = 0;
 }
 
-void Cpu6502::irq() {
-  if (sr_ & 0x04) return; // I flag set -> masked
-  // push PC and flags
-  write(0x0100 | sp_, (uint8_t)(pc_ >> 8)); sp_--;
-  write(0x0100 | sp_, (uint8_t)(pc_ & 0xFF)); sp_--;
-  write(0x0100 | sp_, sr_); sp_--;
-  sr_ |= 0x04; // set I
-  pc_ = read16(0xFFFE);
+void Cpu6502::interrumpir(uint16_t vector, uint8_t flags) {
+  push((uint8_t)(pc_ >> 8));
+  push((uint8_t)pc_);
+  push(flags);
+  sr_ |= FI;
+  i_muestreado_ = true;
+  pc_ = read16(vector);
 }
 
-void Cpu6502::nmi() {
-  write(0x0100 | sp_, (uint8_t)(pc_ >> 8)); sp_--;
-  write(0x0100 | sp_, (uint8_t)(pc_ & 0xFF)); sp_--;
-  write(0x0100 | sp_, sr_); sp_--;
-  sr_ |= 0x04;
-  pc_ = read16(0xFFFA);
+void Cpu6502::irq() {
+  if (sr_ & FI) return;
+  interrumpir(0xFFFE, (uint8_t)((sr_ & ~FB) | F1));
 }
+
+void Cpu6502::nmi() { interrumpir(0xFFFA, (uint8_t)((sr_ & ~FB) | F1)); }
+
+// --- ALU --------------------------------------------------------------------
+
+// Suma en decimal como el VHDL: Z sale del resultado binario; N y V, del resultado
+// con el nibble bajo ya corregido; C, de la corrección del nibble alto.
+void Cpu6502::adc(uint8_t m, bool c) {
+  unsigned r = a_ + m + (c ? 1 : 0);
+  const unsigned bajo = (a_ & 0x0F) + (m & 0x0F) + (c ? 1 : 0);
+  set_flag(FZ, (r & 0xFF) == 0);
+  unsigned alto = r >> 4;       // 5 bits
+  unsigned lo = r & 0x0F;
+  if ((sr_ & FD) && bajo > 9) {
+    lo = (lo + 6) & 0x0F;
+    if (bajo < 16) alto = (alto + 1) & 0x1F;
+  }
+  const uint8_t medio = (uint8_t)((alto << 4) | lo);
+  set_flag(FN, (medio & 0x80) != 0);
+  set_flag(FV, ((a_ ^ medio) & (m ^ medio) & 0x80) != 0);
+  bool carry = (alto & 0x10) != 0;
+  if ((sr_ & FD) && alto > 9) {
+    alto += 6;
+    carry = true;
+  }
+  set_flag(FC, carry);
+  a_ = (uint8_t)((alto << 4) | lo);
+}
+
+// Resta: todos los flags salen del resultado binario; en decimal solo se corrige A.
+void Cpu6502::sbc(uint8_t m, bool c) {
+  const uint8_t im = (uint8_t)~m;
+  const unsigned r = a_ + im + (c ? 1 : 0);
+  const unsigned bajo = (a_ & 0x0F) + (im & 0x0F) + (c ? 1 : 0);
+  const uint8_t bin = (uint8_t)r;
+  set_z_n(bin);
+  set_flag(FV, ((a_ ^ bin) & (im ^ bin) & 0x80) != 0);
+  set_flag(FC, r > 0xFF);
+  unsigned alto = r >> 4, lo = r & 0x0F;
+  if (sr_ & FD) {
+    if (bajo < 16) lo -= 6;
+    if (r <= 0xFF) alto -= 6;
+  }
+  a_ = (uint8_t)(((alto & 0x0F) << 4) | (lo & 0x0F));
+}
+
+void Cpu6502::cmp(uint8_t reg, uint8_t m) {
+  set_z_n((uint8_t)(reg - m));
+  set_flag(FC, reg >= m);
+}
+
+uint8_t Cpu6502::asl(uint8_t v, bool c) {
+  set_flag(FC, (v & 0x80) != 0);
+  v = (uint8_t)((v << 1) | (c ? 1 : 0));
+  set_z_n(v);
+  return v;
+}
+
+uint8_t Cpu6502::lsr(uint8_t v, bool c) {
+  set_flag(FC, (v & 0x01) != 0);
+  v = (uint8_t)((v >> 1) | (c ? 0x80 : 0));
+  set_z_n(v);
+  return v;
+}
+
+void Cpu6502::arr(uint8_t m) {
+  const uint8_t t = a_ & m;
+  uint8_t r = (uint8_t)((t >> 1) | ((sr_ & FC) ? 0x80 : 0));
+  set_z_n(r);
+  set_flag(FC, (t & 0x80) != 0);
+  set_flag(FV, (((t >> 7) ^ (t >> 6)) & 1) != 0);
+  if (sr_ & FD) {
+    if ((t & 0x0F) + (t & 0x01) > 5) r = (uint8_t)((r & 0xF0) | ((r + 6) & 0x0F));
+    const bool ajuste = (t >> 4) + ((t >> 4) & 1) > 5;
+    if (ajuste) r = (uint8_t)(r + 0x60);
+    set_flag(FC, ajuste);
+  }
+  a_ = r;
+}
+
+// --- Ejecución --------------------------------------------------------------
 
 void Cpu6502::step() {
-  // Comprobar IRQ si la línea está activa (activa en bajo) y las interrupciones
-  // no están enmascaradas.
-  if (bus_.irq_asserted() && !(sr_ & 0x04)) {
-    irq();
+  // El núcleo muestrea la IRQ antes de que CLI/SEI/PLP actualicen I, así que su
+  // efecto llega una instrucción después (i_muestreado_).
+  if (!i_muestreado_ && bus_.irq_asserted()) {
+    interrumpir(0xFFFE, (uint8_t)((sr_ & ~FB) | F1));
     last_cycles_ = 7;
-    ciclos_totales_ += (uint64_t)last_cycles_;
+    ciclos_totales_ += 7;
+    return;
+  }
+  if (jam_) { // parada: solo sale con un reset
+    last_cycles_ = 2;
+    ciclos_totales_ += 2;
     return;
   }
 
-  uint8_t op = read(pc_++);
-  last_cycles_ = kOpcodeCycles[op];
+  const uint8_t opcode = read(pc_++);
+  const Opcode o = kOpcodes[opcode];
+  last_cycles_ = kOpcodeCycles[opcode];
+  const uint8_t i_previo = sr_ & FI;
 
-  switch (op) {
-    // ---- LDA ----
-    case 0xA9: a_ = read(pc_++); set_z_n(a_); break;               // imm
-    case 0xA5: { uint8_t z = read(pc_++); a_ = read(z); set_z_n(a_); break; } // zp
-    case 0xB5: { uint8_t z = read(pc_++); a_ = read((uint8_t)(z + x_)); set_z_n(a_); break; } // zp,x
-    case 0xAD: { uint16_t a = read16(pc_); pc_ += 2; a_ = read(a); set_z_n(a_); break; } // abs
-    case 0xBD: { uint16_t a = read16(pc_); pc_ += 2; a_ = read(a + x_); set_z_n(a_); break; } // abs,x
-    case 0xB9: { uint16_t a = read16(pc_); pc_ += 2; a_ = read(a + y_); set_z_n(a_); break; } // abs,y
-    case 0xA1: { uint8_t z = read(pc_++); uint16_t a = read(z) | (read((uint8_t)(z+1)) << 8); a_ = read(a + x_); set_z_n(a_); break; } // (ind,x)
-    case 0xB1: { uint8_t z = read(pc_++); uint16_t a = read(z) | (read((uint8_t)(z+1)) << 8); a_ = read(a + y_); set_z_n(a_); break; } // (ind),y
-
-    // ---- LDX ----
-    case 0xA2: x_ = read(pc_++); set_z_n(x_); break;               // imm
-    case 0xA6: { uint8_t z = read(pc_++); x_ = read(z); set_z_n(x_); break; } // zp
-    case 0xB6: { uint8_t z = read(pc_++); x_ = read((uint8_t)(z + y_)); set_z_n(x_); break; } // zp,y
-    case 0xAE: { uint16_t a = read16(pc_); pc_ += 2; x_ = read(a); set_z_n(x_); break; } // abs
-    case 0xBE: { uint16_t a = read16(pc_); pc_ += 2; x_ = read(a + y_); set_z_n(x_); break; } // abs,y
-
-    // ---- LDY ----
-    case 0xA0: y_ = read(pc_++); set_z_n(y_); break;               // imm
-    case 0xA4: { uint8_t z = read(pc_++); y_ = read(z); set_z_n(y_); break; } // zp
-    case 0xB4: { uint8_t z = read(pc_++); y_ = read((uint8_t)(z + x_)); set_z_n(y_); break; } // zp,x
-    case 0xAC: { uint16_t a = read16(pc_); pc_ += 2; y_ = read(a); set_z_n(y_); break; } // abs
-    case 0xBC: { uint16_t a = read16(pc_); pc_ += 2; y_ = read(a + x_); set_z_n(y_); break; } // abs,x
-
-    // ---- STA ----
-    case 0x85: { uint8_t z = read(pc_++); write(z, a_); break; }    // zp
-    case 0x95: { uint8_t z = read(pc_++); write((uint8_t)(z + x_), a_); break; } // zp,x
-    case 0x8D: { uint16_t a = read16(pc_); pc_ += 2; write(a, a_); break; } // abs
-    case 0x9D: { uint16_t a = read16(pc_); pc_ += 2; write(a + x_, a_); break; } // abs,x
-    case 0x99: { uint16_t a = read16(pc_); pc_ += 2; write(a + y_, a_); break; } // abs,y
-    case 0x81: { uint8_t z = read(pc_++); uint16_t a = read(z) | (read((uint8_t)(z+1)) << 8); write(a + x_, a_); break; } // (ind,x)
-    case 0x91: { uint8_t z = read(pc_++); uint16_t a = read(z) | (read((uint8_t)(z+1)) << 8); write(a + y_, a_); break; } // (ind),y
-
-    // ---- STX ----
-    case 0x86: { uint8_t z = read(pc_++); write(z, x_); break; }    // zp
-    case 0x96: { uint8_t z = read(pc_++); write((uint8_t)(z + y_), x_); break; } // zp,y
-    case 0x8E: { uint16_t a = read16(pc_); pc_ += 2; write(a, x_); break; } // abs
-
-    // ---- STY ----
-    case 0x84: { uint8_t z = read(pc_++); write(z, y_); break; }    // zp
-    case 0x94: { uint8_t z = read(pc_++); write((uint8_t)(z + x_), y_); break; } // zp,x
-    case 0x8C: { uint16_t a = read16(pc_); pc_ += 2; write(a, y_); break; } // abs
-
-    // ---- Transferencias ----
-    case 0xAA: x_ = a_; set_z_n(x_); break; // TAX
-    case 0xA8: y_ = a_; set_z_n(y_); break; // TAY
-    case 0x8A: a_ = x_; set_z_n(a_); break; // TXA
-    case 0x98: a_ = y_; set_z_n(a_); break; // TYA
-    case 0x9A: sp_ = x_; break;             // TXS
-    case 0xBA: x_ = sp_; set_z_n(x_); break;// TSX
-    case 0x48: write(0x0100 | sp_, a_); sp_--; break; // PHA
-    case 0x68: sp_++; a_ = read(0x0100 | sp_); set_z_n(a_); break; // PLA
-    case 0x08: write(0x0100 | sp_, sr_ | 0x30); sp_--; break; // PHP
-    case 0x28: sp_++; sr_ = read(0x0100 | sp_); break;        // PLP
-
-    // ---- ORA (faltantes) ----
-    case 0x01: { uint8_t z = read(pc_++); uint16_t a = read(z) | (read((uint8_t)(z+1)) << 8); a_ |= read(a + x_); set_z_n(a_); break; } // (ind,x)
-    case 0x11: { uint8_t z = read(pc_++); uint16_t a = read(z) | (read((uint8_t)(z+1)) << 8); a_ |= read(a + y_); set_z_n(a_); break; } // (ind),y
-    case 0x15: { uint8_t z = read(pc_++); a_ |= read((uint8_t)(z + x_)); set_z_n(a_); break; }   // zp,x
-    case 0x19: { uint16_t a = read16(pc_); pc_ += 2; a_ |= read(a + y_); set_z_n(a_); break; } // abs,y
-    case 0x1D: { uint16_t a = read16(pc_); pc_ += 2; a_ |= read(a + x_); set_z_n(a_); break; } // abs,x
-
-    // ---- AND (faltantes) ----
-    case 0x21: { uint8_t z = read(pc_++); uint16_t a = read(z) | (read((uint8_t)(z+1)) << 8); a_ &= read(a + x_); set_z_n(a_); break; } // (ind,x)
-    case 0x31: { uint8_t z = read(pc_++); uint16_t a = read(z) | (read((uint8_t)(z+1)) << 8); a_ &= read(a + y_); set_z_n(a_); break; } // (ind),y
-    case 0x35: { uint8_t z = read(pc_++); a_ &= read((uint8_t)(z + x_)); set_z_n(a_); break; }   // zp,x
-    case 0x39: { uint16_t a = read16(pc_); pc_ += 2; a_ &= read(a + y_); set_z_n(a_); break; } // abs,y
-    case 0x3D: { uint16_t a = read16(pc_); pc_ += 2; a_ &= read(a + x_); set_z_n(a_); break; } // abs,x
-
-    // ---- EOR (faltantes) ----
-    case 0x41: { uint8_t z = read(pc_++); uint16_t a = read(z) | (read((uint8_t)(z+1)) << 8); a_ ^= read(a + x_); set_z_n(a_); break; } // (ind,x)
-    case 0x51: { uint8_t z = read(pc_++); uint16_t a = read(z) | (read((uint8_t)(z+1)) << 8); a_ ^= read(a + y_); set_z_n(a_); break; } // (ind),y
-    case 0x55: { uint8_t z = read(pc_++); a_ ^= read((uint8_t)(z + x_)); set_z_n(a_); break; }   // zp,x
-    case 0x4D: { uint16_t a = read16(pc_); pc_ += 2; a_ ^= read(a); set_z_n(a_); break; }       // abs
-    case 0x59: { uint16_t a = read16(pc_); pc_ += 2; a_ ^= read(a + y_); set_z_n(a_); break; } // abs,y
-    case 0x5D: { uint16_t a = read16(pc_); pc_ += 2; a_ ^= read(a + x_); set_z_n(a_); break; } // abs,x
-
-    // ---- CMP (faltantes) ----
-    case 0xC1: { uint8_t z = read(pc_++); uint16_t a = read(z) | (read((uint8_t)(z+1)) << 8); uint8_t m = read(a + x_); uint8_t r = a_ - m; set_z_n(r); set_carry(a_ >= m); break; } // (ind,x)
-    case 0xD1: { uint8_t z = read(pc_++); uint16_t a = read(z) | (read((uint8_t)(z+1)) << 8); uint8_t m = read(a + y_); uint8_t r = a_ - m; set_z_n(r); set_carry(a_ >= m); break; } // (ind),y
-    case 0xD5: { uint8_t z = read(pc_++); uint8_t m = read((uint8_t)(z + x_)); uint8_t r = a_ - m; set_z_n(r); set_carry(a_ >= m); break; } // zp,x
-    case 0xD9: { uint16_t a = read16(pc_); pc_ += 2; uint8_t m = read(a + y_); uint8_t r = a_ - m; set_z_n(r); set_carry(a_ >= m); break; } // abs,y
-    case 0xDD: { uint16_t a = read16(pc_); pc_ += 2; uint8_t m = read(a + x_); uint8_t r = a_ - m; set_z_n(r); set_carry(a_ >= m); break; } // abs,x
-
-    // ---- CPX / CPY (faltantes) ----
-    case 0xE4: { uint8_t z = read(pc_++); uint8_t m = read(z); uint8_t r = x_ - m; set_z_n(r); set_carry(x_ >= m); break; } // CPX zp
-    case 0xEC: { uint16_t a = read16(pc_); pc_ += 2; uint8_t m = read(a); uint8_t r = x_ - m; set_z_n(r); set_carry(x_ >= m); break; } // CPX abs
-    case 0xC4: { uint8_t z = read(pc_++); uint8_t m = read(z); uint8_t r = y_ - m; set_z_n(r); set_carry(y_ >= m); break; } // CPY zp
-    case 0xCC: { uint16_t a = read16(pc_); pc_ += 2; uint8_t m = read(a); uint8_t r = y_ - m; set_z_n(r); set_carry(y_ >= m); break; } // CPY abs
-
-    // ---- LDA (faltantes) ----
-    case 0xB2: { uint8_t z = read(pc_++); uint16_t a = read(z) | (read((uint8_t)(z+1)) << 8); a_ = read(a); set_z_n(a_); break; } // (ind)
-
-    // ---- INC / DEC (faltantes) ----
-    case 0xFE: { uint16_t a = read16(pc_); pc_ += 2; uint8_t v = read(a + x_) + 1; write(a + x_, v); set_z_n(v); break; } // INC abs,x
-    case 0xD6: { uint8_t z = read(pc_++); uint8_t v = read((uint8_t)(z + x_)) - 1; write((uint8_t)(z + x_), v); set_z_n(v); break; } // DEC zp,x
-    case 0xDE: { uint16_t a = read16(pc_); pc_ += 2; uint8_t v = read(a + x_) - 1; write(a + x_, v); set_z_n(v); break; } // DEC abs,x
-
-    // ---- Shifts / Rotates en memoria (faltantes) ----
-    case 0x06: { uint8_t z = read(pc_++); uint8_t v = read(z); bool c = v & 0x80; v <<= 1; write(z, v); set_z_n(v); set_carry(c); break; } // ASL zp
-    case 0x16: { uint8_t z = read(pc_++); uint8_t e = (uint8_t)(z + x_); uint8_t v = read(e); bool c = v & 0x80; v <<= 1; write(e, v); set_z_n(v); set_carry(c); break; } // ASL zp,x
-    case 0x0E: { uint16_t a = read16(pc_); pc_ += 2; uint8_t v = read(a); bool c = v & 0x80; v <<= 1; write(a, v); set_z_n(v); set_carry(c); break; } // ASL abs
-    case 0x1E: { uint16_t a = read16(pc_); pc_ += 2; uint8_t e = a + x_; uint8_t v = read(e); bool c = v & 0x80; v <<= 1; write(e, v); set_z_n(v); set_carry(c); break; } // ASL abs,x
-    case 0x46: { uint8_t z = read(pc_++); uint8_t v = read(z); bool c = v & 0x01; v >>= 1; write(z, v); set_z_n(v); set_carry(c); break; } // LSR zp
-    case 0x56: { uint8_t z = read(pc_++); uint8_t e = (uint8_t)(z + x_); uint8_t v = read(e); bool c = v & 0x01; v >>= 1; write(e, v); set_z_n(v); set_carry(c); break; } // LSR zp,x
-    case 0x4E: { uint16_t a = read16(pc_); pc_ += 2; uint8_t v = read(a); bool c = v & 0x01; v >>= 1; write(a, v); set_z_n(v); set_carry(c); break; } // LSR abs
-    case 0x5E: { uint16_t a = read16(pc_); pc_ += 2; uint8_t e = a + x_; uint8_t v = read(e); bool c = v & 0x01; v >>= 1; write(e, v); set_z_n(v); set_carry(c); break; } // LSR abs,x
-    case 0x26: { uint8_t z = read(pc_++); uint8_t v = read(z); bool c = v & 0x80; v = (uint8_t)((v << 1) | (sr_ & 0x01)); write(z, v); set_z_n(v); set_carry(c); break; } // ROL zp
-    case 0x36: { uint8_t z = read(pc_++); uint8_t e = (uint8_t)(z + x_); uint8_t v = read(e); bool c = v & 0x80; v = (uint8_t)((v << 1) | (sr_ & 0x01)); write(e, v); set_z_n(v); set_carry(c); break; } // ROL zp,x
-    case 0x2E: { uint16_t a = read16(pc_); pc_ += 2; uint8_t v = read(a); bool c = v & 0x80; v = (uint8_t)((v << 1) | (sr_ & 0x01)); write(a, v); set_z_n(v); set_carry(c); break; } // ROL abs
-    case 0x3E: { uint16_t a = read16(pc_); pc_ += 2; uint8_t e = a + x_; uint8_t v = read(e); bool c = v & 0x80; v = (uint8_t)((v << 1) | (sr_ & 0x01)); write(e, v); set_z_n(v); set_carry(c); break; } // ROL abs,x
-    case 0x66: { uint8_t z = read(pc_++); uint8_t v = read(z); bool c = v & 0x01; v = (uint8_t)((v >> 1) | ((sr_ & 0x01) << 7)); write(z, v); set_z_n(v); set_carry(c); break; } // ROR zp
-    case 0x76: { uint8_t z = read(pc_++); uint8_t e = (uint8_t)(z + x_); uint8_t v = read(e); bool c = v & 0x01; v = (uint8_t)((v >> 1) | ((sr_ & 0x01) << 7)); write(e, v); set_z_n(v); set_carry(c); break; } // ROR zp,x
-    case 0x6E: { uint16_t a = read16(pc_); pc_ += 2; uint8_t v = read(a); bool c = v & 0x01; v = (uint8_t)((v >> 1) | ((sr_ & 0x01) << 7)); write(a, v); set_z_n(v); set_carry(c); break; } // ROR abs
-    case 0x7E: { uint16_t a = read16(pc_); pc_ += 2; uint8_t e = a + x_; uint8_t v = read(e); bool c = v & 0x01; v = (uint8_t)((v >> 1) | ((sr_ & 0x01) << 7)); write(e, v); set_z_n(v); set_carry(c); break; } // ROR abs,x
-
-    // ---- BIT (faltantes) ----
-    case 0x2C: { uint16_t a = read16(pc_); pc_ += 2; uint8_t m = read(a); if (!(a_ & m)) sr_ |= 0x02; else sr_ &= ~0x02; if (m & 0x80) sr_ |= 0x80; else sr_ &= ~0x80; if (m & 0x40) sr_ |= 0x40; else sr_ &= ~0x40; break; } // BIT abs
-
-    // ---- Incrementos/decrementos ----
-    case 0xE6: { uint8_t z = read(pc_++); uint8_t v = read(z) + 1; write(z, v); set_z_n(v); break; } // INC zp
-    case 0xF6: { uint8_t z = read(pc_++); uint8_t v = read((uint8_t)(z + x_)) + 1; write((uint8_t)(z + x_), v); set_z_n(v); break; } // INC zp,x
-    case 0xEE: { uint16_t a = read16(pc_); pc_ += 2; uint8_t v = read(a) + 1; write(a, v); set_z_n(v); break; } // INC abs
-    case 0xC6: { uint8_t z = read(pc_++); uint8_t v = read(z) - 1; write(z, v); set_z_n(v); break; } // DEC zp
-    case 0xCE: { uint16_t a = read16(pc_); pc_ += 2; uint8_t v = read(a) - 1; write(a, v); set_z_n(v); break; } // DEC abs
-    case 0xE8: x_++; set_z_n(x_); break; // INX
-    case 0xC8: y_++; set_z_n(y_); break; // INY
-    case 0xCA: x_--; set_z_n(x_); break; // DEX
-    case 0x88: y_--; set_z_n(y_); break; // DEY
-
-    // ---- Saltos ----
-    case 0x4C: pc_ = read16(pc_); break; // JMP abs
-    case 0x6C: { uint16_t a = read16(pc_); pc_ = read16(a); break; } // JMP (ind)
-    case 0x20: { // JSR abs: empuja PC-1 (dirección del último byte de la
-                 // instrucción) para que RTS haga +1 y vuelva a la siguiente.
-      uint16_t tgt = read16(pc_);
-      uint16_t ret = (uint16_t)(pc_ + 1); // PC apunta al opcode; +1 = último byte
-      write(0x0100 | sp_, (uint8_t)(ret >> 8)); sp_--;
-      write(0x0100 | sp_, (uint8_t)(ret & 0xFF)); sp_--;
-      pc_ = tgt;
+  // Dirección efectiva.
+  uint16_t ea = 0, base = 0;
+  switch (o.modo) {
+    case IMP: case ACC: break;
+    case IMM: case REL: ea = pc_++; break;
+    case ZP:  ea = read(pc_++); break;
+    case ZPX: ea = (uint8_t)(read(pc_++) + x_); break;
+    case ZPY: ea = (uint8_t)(read(pc_++) + y_); break;
+    case ABS: ea = read16(pc_); pc_ += 2; break;
+    case ABX: base = read16(pc_); pc_ += 2; ea = (uint16_t)(base + x_); break;
+    case ABY: base = read16(pc_); pc_ += 2; ea = (uint16_t)(base + y_); break;
+    case IZX: {
+      const uint8_t z = (uint8_t)(read(pc_++) + x_);
+      ea = (uint16_t)(read(z) | (read((uint8_t)(z + 1)) << 8));
       break;
     }
-    case 0x60: sp_++; { uint8_t lo = read(0x0100 | sp_); sp_++; uint8_t hi = read(0x0100 | sp_); pc_ = (hi << 8) | lo; pc_++; break; } // RTS
-    case 0x40: sp_++; sr_ = read(0x0100 | sp_); sp_++; { uint8_t lo = read(0x0100 | sp_); sp_++; uint8_t hi = read(0x0100 | sp_); pc_ = (hi << 8) | lo; break; } // RTI
+    case IZY: {
+      const uint8_t z = read(pc_++);
+      base = (uint16_t)(read(z) | (read((uint8_t)(z + 1)) << 8));
+      ea = (uint16_t)(base + y_);
+      break;
+    }
+    case IND: {
+      const uint16_t p = read16(pc_);
+      pc_ += 2;
+      // El 6510 (y el VHDL) no pasa de página al leer el byte alto.
+      ea = (uint16_t)(read(p) |
+                      (read((uint16_t)((p & 0xFF00) | (uint8_t)(p + 1))) << 8));
+      break;
+    }
+  }
+  const bool indexado = o.modo == ABX || o.modo == ABY || o.modo == IZY;
+  const bool cruza = indexado && ((base ^ ea) & 0xFF00);
 
-    // ---- Ramas ----
-    case 0x10: { int8_t r = (int8_t)read(pc_++); if (!(sr_ & 0x80)) pc_ += r; break; } // BPL
-    case 0x30: { int8_t r = (int8_t)read(pc_++); if (sr_ & 0x80) pc_ += r; break; }   // BMI
-    case 0x50: { int8_t r = (int8_t)read(pc_++); if (!(sr_ & 0x40)) pc_ += r; break; } // BVC
-    case 0x70: { int8_t r = (int8_t)read(pc_++); if (sr_ & 0x40) pc_ += r; break; }   // BVS
-    case 0x90: { int8_t r = (int8_t)read(pc_++); if (!(sr_ & 0x01)) pc_ += r; break; } // BCC
-    case 0xB0: { int8_t r = (int8_t)read(pc_++); if (sr_ & 0x01) pc_ += r; break; }   // BCS
-    case 0xD0: { int8_t r = (int8_t)read(pc_++); if (!(sr_ & 0x02)) pc_ += r; break; } // BNE
-    case 0xF0: { int8_t r = (int8_t)read(pc_++); if (sr_ & 0x02) pc_ += r; break; }   // BEQ
+  // Operando de una instrucción de LECTURA: +1 ciclo si cruza página.
+  auto leer = [&]() -> uint8_t {
+    if (cruza) last_cycles_++;
+    return read(ea);
+  };
+  auto rama = [&](bool tomada) {
+    const int8_t d = (int8_t)read(ea);
+    if (!tomada) return;
+    const uint16_t destino = (uint16_t)(pc_ + d);
+    last_cycles_ += ((destino ^ pc_) & 0xFF00) ? 2 : 1;
+    pc_ = destino;
+  };
+  auto cargar = [&](uint8_t& reg, uint8_t v) { reg = v; set_z_n(v); };
+  const bool c = (sr_ & FC) != 0;
+  // SHA/SHX/SHY/SHS: el valor se enmascara con el byte alto de la base + 1.
+  const uint8_t h1 = (uint8_t)((base >> 8) + 1);
 
-    // ---- Aritmética lógica ----
-    case 0x0A: { bool c = a_ & 0x80; a_ <<= 1; set_z_n(a_); set_carry(c); break; } // ASL A
-    case 0x4A: { bool c = a_ & 0x01; a_ >>= 1; set_z_n(a_); set_carry(c); break; } // LSR A
-    case 0x2A: { bool c = a_ & 0x80; a_ = (a_ << 1) | (sr_ & 0x01); set_z_n(a_); set_carry(c); break; } // ROL A
-    case 0x6A: { bool c = a_ & 0x01; a_ = (a_ >> 1) | ((sr_ & 0x01) << 7); set_z_n(a_); set_carry(c); break; } // ROR A
+  switch (o.op) {
+    // Cargas y almacenamientos
+    case LDA: cargar(a_, leer()); break;
+    case LDX: cargar(x_, leer()); break;
+    case LDY: cargar(y_, leer()); break;
+    case LAX: cargar(a_, leer()); x_ = a_; break;
+    case LXA: cargar(a_, (uint8_t)((a_ | 0xEE) & leer())); x_ = a_; break;
+    case LAS: cargar(a_, (uint8_t)(sp_ & leer())); x_ = sp_ = a_; break;
+    case STA: write(ea, a_); break;
+    case STX: write(ea, x_); break;
+    case STY: write(ea, y_); break;
+    case SAX: write(ea, a_ & x_); break;
+    case SHA: write(ea, a_ & x_ & h1); break;
+    case SHX: write(ea, x_ & h1); break;
+    case SHY: write(ea, y_ & h1); break;
+    case SHS: sp_ = a_ & x_; write(ea, sp_ & h1); break;
 
-    case 0xE9: case 0xE5: case 0xF5: case 0xED: case 0xFD: case 0xF9: case 0xE1: case 0xF1: { // SBC
-      uint8_t m;
-      switch (op) {
-        case 0xE9: m = read(pc_++); break;
-        case 0xE5: { uint8_t z = read(pc_++); m = read(z); break; }
-        case 0xF5: { uint8_t z = read(pc_++); m = read((uint8_t)(z + x_)); break; }
-        case 0xED: { uint16_t a = read16(pc_); pc_ += 2; m = read(a); break; }
-        case 0xFD: { uint16_t a = read16(pc_); pc_ += 2; m = read(a + x_); break; }
-        case 0xF9: { uint16_t a = read16(pc_); pc_ += 2; m = read(a + y_); break; }
-        case 0xE1: { uint8_t z = read(pc_++); uint16_t a = read(z) | (read((uint8_t)(z+1)) << 8); m = read(a + x_); break; }
-        case 0xF1: { uint8_t z = read(pc_++); uint16_t a = read(z) | (read((uint8_t)(z+1)) << 8); m = read(a + y_); break; }
-        default: m = 0; break;
-      }
-      uint16_t r = a_ + (uint8_t)(~m) + (sr_ & 0x01);
-      set_carry(r > 0xFF);
-      // overflow: (a ^ r) & (m ^ r) & 0x80
-      if ((a_ ^ (uint8_t)r) & ((uint8_t)(~m) ^ (uint8_t)r) & 0x80) sr_ |= 0x40; else sr_ &= ~0x40;
-      a_ = (uint8_t)r;
-      set_z_n(a_);
+    // Transferencias y pila
+    case TAX: cargar(x_, a_); break;
+    case TAY: cargar(y_, a_); break;
+    case TXA: cargar(a_, x_); break;
+    case TYA: cargar(a_, y_); break;
+    case TSX: cargar(x_, sp_); break;
+    case TXS: sp_ = x_; break;
+    case PHA: push(a_); break;
+    case PHP: push((uint8_t)(sr_ | FB | F1)); break;
+    case PLA: cargar(a_, pop()); break;
+    case PLP: sr_ = (uint8_t)((pop() & ~FB) | F1); break;
+
+    // Lógica y aritmética
+    case ORA: cargar(a_, (uint8_t)(a_ | leer())); break;
+    case AND: cargar(a_, (uint8_t)(a_ & leer())); break;
+    case EOR: cargar(a_, (uint8_t)(a_ ^ leer())); break;
+    case ADC: adc(leer(), c); break;
+    case SBC: sbc(leer(), c); break;
+    case CMP: cmp(a_, leer()); break;
+    case CPX: cmp(x_, leer()); break;
+    case CPY: cmp(y_, leer()); break;
+    case BIT: {
+      const uint8_t m = leer();
+      set_flag(FZ, (a_ & m) == 0);
+      set_flag(FN, (m & 0x80) != 0);
+      set_flag(FV, (m & 0x40) != 0);
+      break;
+    }
+    case ANC: cargar(a_, (uint8_t)(a_ & leer())); set_flag(FC, (a_ & 0x80) != 0); break;
+    case ALR: a_ = lsr((uint8_t)(a_ & leer()), false); break;
+    case ARR: arr(leer()); break;
+    case ANE: cargar(a_, (uint8_t)((a_ | 0xEE) & x_ & leer())); break;
+    case SBX: {
+      const uint8_t m = leer(), ax = a_ & x_;
+      cmp(ax, m);
+      x_ = (uint8_t)(ax - m);
       break;
     }
 
-    case 0x69: case 0x65: case 0x75: case 0x6D: case 0x7D: case 0x79: case 0x61: case 0x71: { // ADC
-      uint8_t m;
-      switch (op) {
-        case 0x69: m = read(pc_++); break;
-        case 0x65: { uint8_t z = read(pc_++); m = read(z); break; }
-        case 0x75: { uint8_t z = read(pc_++); m = read((uint8_t)(z + x_)); break; }
-        case 0x6D: { uint16_t a = read16(pc_); pc_ += 2; m = read(a); break; }
-        case 0x7D: { uint16_t a = read16(pc_); pc_ += 2; m = read(a + x_); break; }
-        case 0x79: { uint16_t a = read16(pc_); pc_ += 2; m = read(a + y_); break; }
-        case 0x61: { uint8_t z = read(pc_++); uint16_t a = read(z) | (read((uint8_t)(z+1)) << 8); m = read(a + x_); break; }
-        case 0x71: { uint8_t z = read(pc_++); uint16_t a = read(z) | (read((uint8_t)(z+1)) << 8); m = read(a + y_); break; }
-        default: m = 0; break;
-      }
-      uint16_t r = a_ + m + (sr_ & 0x01);
-      set_carry(r > 0xFF);
-      if ((~(a_ ^ m) & (a_ ^ (uint8_t)r) & 0x80)) sr_ |= 0x40; else sr_ &= ~0x40;
-      a_ = (uint8_t)r;
-      set_z_n(a_);
+    // Incrementos
+    case INX: cargar(x_, (uint8_t)(x_ + 1)); break;
+    case INY: cargar(y_, (uint8_t)(y_ + 1)); break;
+    case DEX: cargar(x_, (uint8_t)(x_ - 1)); break;
+    case DEY: cargar(y_, (uint8_t)(y_ - 1)); break;
+    case INC: { const uint8_t v = (uint8_t)(read(ea) + 1); write(ea, v); set_z_n(v); break; }
+    case DEC: { const uint8_t v = (uint8_t)(read(ea) - 1); write(ea, v); set_z_n(v); break; }
+
+    // Desplazamientos
+    case ASL: if (o.modo == ACC) a_ = asl(a_, false); else write(ea, asl(read(ea), false)); break;
+    case ROL: if (o.modo == ACC) a_ = asl(a_, c);     else write(ea, asl(read(ea), c)); break;
+    case LSR: if (o.modo == ACC) a_ = lsr(a_, false); else write(ea, lsr(read(ea), false)); break;
+    case ROR: if (o.modo == ACC) a_ = lsr(a_, c);     else write(ea, lsr(read(ea), c)); break;
+
+    // Combinadas (ilegales)
+    case SLO: { const uint8_t v = asl(read(ea), false); write(ea, v); cargar(a_, (uint8_t)(a_ | v)); break; }
+    case RLA: { const uint8_t v = asl(read(ea), c);     write(ea, v); cargar(a_, (uint8_t)(a_ & v)); break; }
+    case SRE: { const uint8_t v = lsr(read(ea), false); write(ea, v); cargar(a_, (uint8_t)(a_ ^ v)); break; }
+    case RRA: { const uint8_t v = lsr(read(ea), c);     write(ea, v); adc(v, (sr_ & FC) != 0); break; }
+    case DCP: { const uint8_t v = (uint8_t)(read(ea) - 1); write(ea, v); cmp(a_, v); break; }
+    case ISC: { const uint8_t v = (uint8_t)(read(ea) + 1); write(ea, v); sbc(v, c); break; }
+
+    // Saltos
+    case JMP: pc_ = ea; break;
+    case JSR: {
+      const uint16_t ret = (uint16_t)(pc_ - 1);
+      push((uint8_t)(ret >> 8));
+      push((uint8_t)ret);
+      pc_ = ea;
       break;
     }
-
-    case 0x29: a_ &= read(pc_++); set_z_n(a_); break; // AND imm
-    case 0x25: { uint8_t z = read(pc_++); a_ &= read(z); set_z_n(a_); break; } // AND zp
-    case 0x2D: { uint16_t a = read16(pc_); pc_ += 2; a_ &= read(a); set_z_n(a_); break; } // AND abs
-    case 0x09: a_ |= read(pc_++); set_z_n(a_); break; // ORA imm
-    case 0x05: { uint8_t z = read(pc_++); a_ |= read(z); set_z_n(a_); break; } // ORA zp
-    case 0x0D: { uint16_t a = read16(pc_); pc_ += 2; a_ |= read(a); set_z_n(a_); break; } // ORA abs
-    case 0x49: a_ ^= read(pc_++); set_z_n(a_); break; // EOR imm
-    case 0x45: { uint8_t z = read(pc_++); a_ ^= read(z); set_z_n(a_); break; } // EOR zp
-
-    case 0xC9: { uint8_t m = read(pc_++); uint8_t r = a_ - m; set_z_n(r); set_carry(a_ >= m); break; } // CMP imm
-    case 0xC5: { uint8_t z = read(pc_++); uint8_t m = read(z); uint8_t r = a_ - m; set_z_n(r); set_carry(a_ >= m); break; } // CMP zp
-    case 0xCD: { uint16_t a = read16(pc_); pc_ += 2; uint8_t m = read(a); uint8_t r = a_ - m; set_z_n(r); set_carry(a_ >= m); break; } // CMP abs
-    case 0xE0: { uint8_t m = read(pc_++); uint8_t r = x_ - m; set_z_n(r); set_carry(x_ >= m); break; } // CPX imm
-    case 0xC0: { uint8_t m = read(pc_++); uint8_t r = y_ - m; set_z_n(r); set_carry(y_ >= m); break; } // CPY imm
-
-    case 0x24: { uint8_t z = read(pc_++); uint8_t m = read(z); if (!(a_ & m)) sr_ |= 0x02; else sr_ &= ~0x02; if (m & 0x80) sr_ |= 0x80; else sr_ &= ~0x80; if (m & 0x40) sr_ |= 0x40; else sr_ &= ~0x40; break; } // BIT zp
-
-    // ---- Flags ----
-    case 0x18: sr_ &= ~0x01; break; // CLC
-    case 0x38: sr_ |= 0x01; break;  // SEC
-    case 0x58: sr_ &= ~0x04; break; // CLI
-    case 0x78: sr_ |= 0x04; break;  // SEI
-    case 0xB8: sr_ &= ~0x40; break; // CLV
-    case 0xD8: sr_ &= ~0x08; break; // CLD
-    case 0xF8: sr_ |= 0x08; break;  // SED
-
-    // ---- NOP / BRK ----
-    case 0xEA: break; // NOP
-    case 0x00: { // BRK
-      pc_++; // skip padding byte
-      write(0x0100 | sp_, (uint8_t)(pc_ >> 8)); sp_--;
-      write(0x0100 | sp_, (uint8_t)(pc_ & 0xFF)); sp_--;
-      write(0x0100 | sp_, sr_ | 0x30); sp_--;
-      sr_ |= 0x04;
-      pc_ = read16(0xFFFE);
+    case RTS: { const uint8_t lo = pop(); pc_ = (uint16_t)((lo | (pop() << 8)) + 1); break; }
+    case RTI: {
+      sr_ = (uint8_t)((pop() & ~FB) | F1);
+      const uint8_t lo = pop();
+      pc_ = (uint16_t)(lo | (pop() << 8));
       break;
     }
+    case BRK: pc_++; interrumpir(0xFFFE, (uint8_t)(sr_ | FB | F1)); break;
+    case BPL: rama(!(sr_ & FN)); break;
+    case BMI: rama((sr_ & FN) != 0); break;
+    case BVC: rama(!(sr_ & FV)); break;
+    case BVS: rama((sr_ & FV) != 0); break;
+    case BCC: rama(!(sr_ & FC)); break;
+    case BCS: rama((sr_ & FC) != 0); break;
+    case BNE: rama(!(sr_ & FZ)); break;
+    case BEQ: rama((sr_ & FZ) != 0); break;
 
-    default:
-      // Instrucción no implementada. En una primera iteración la tratamos
-      // como NOP para no romper el arranque; en producción hay que cubrirlas.
+    // Flags
+    case CLC: sr_ &= (uint8_t)~FC; break;
+    case SEC: sr_ |= FC; break;
+    case CLI: sr_ &= (uint8_t)~FI; break;
+    case SEI: sr_ |= FI; break;
+    case CLV: sr_ &= (uint8_t)~FV; break;
+    case CLD: sr_ &= (uint8_t)~FD; break;
+    case SED: sr_ |= FD; break;
+
+    case NOP: if (o.modo != IMP) (void)leer(); break;
+    case JAM:
+      // En el VHDL el comportamiento es indefinido; un 6502 real se detiene.
+      jam_ = true;
+      pc_--;
+      std::fprintf(stderr, "CPU: opcode JAM $%02X en $%04X; parada hasta el reset\n",
+                   opcode, pc_);
       break;
   }
 
-  // Los ciclos de esta instrucción. Se suma aqui (y no al entrar) para que el
-  // total sea exacto desde la primera instrucción.
+  const bool diferida = o.op == CLI || o.op == SEI || o.op == PLP;
+  i_muestreado_ = (diferida ? i_previo : (uint8_t)(sr_ & FI)) != 0;
   ciclos_totales_ += (uint64_t)last_cycles_;
 }

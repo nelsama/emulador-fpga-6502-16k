@@ -89,13 +89,13 @@ normales; el SID player va en `2700`). Si no la conoces, no la adivines.
 
 ---
 
-## 5. Los nombres de archivo son 8.3
+## 5. Los nombres de archivo tienen 11 caracteres como máximo
 
-**Restricción.** MicroFS guarda nombres de 8 caracteres de base + 3 de
-extensión.
+**Restricción.** MicroFS guarda 11 caracteres en total, punto incluido
+(8 de base + 3 de extensión como mucho).
 
 **Qué se ve.** Un archivo añadido como `river_raid_deluxe.bin` aparece en la SD
-como `RIVER_RA.BIN`, y el `LOAD` con el nombre largo no lo encuentra.
+como `RIVER_RA.BI`, y el `LOAD` con el nombre largo no lo encuentra.
 
 **Qué hacer.** Usar el nombre **tal y como aparece en `ls`** (el recorte lo hace
 el emulador; el monitor solo conoce el corto).

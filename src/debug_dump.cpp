@@ -323,6 +323,8 @@ bool dump_state_txt_mem(Bus& bus, const Cpu6502* cpu, std::string& out) {
     appendf(out, "  dir1/dir2: %02X / %02X (1 = entrada)\n", g->dir1(), g->dir2());
     // $C004 bit0: flag de usuario que sobrevive al reset por S1.
     appendf(out, "  $C004 flag usuario: %d\n", g->flag_usuario() ? 1 : 0);
+    appendf(out, "  $C005 pulsadores: BTN_A=%d BTN_B=%d (0 = pulsado)\n",
+            g->botones() & 1, (g->botones() >> 1) & 1);
 
     // Puertos 1 y 2 completos, bit a bit. Refleja exactamente lo que lee la CPU
     // en $C000/$C001 (pines si el bit es entrada, registro si es salida), así
@@ -409,7 +411,7 @@ bool dump_state_txt_mem(Bus& bus, const Cpu6502* cpu, std::string& out) {
         out += "          sin banda inferior\n";
     }
     appendf(out, "  scroll de la colision: x=%d y=%d%s\n", sc.colision_x, sc.colision_y,
-            (sc.raster0 != 0xFF && sc.raster1 != 0xFF)
+            (sc.raster1 < Video::H && (sc.raster0 == 0xFF || sc.raster0 < Video::H))
                 ? "  (ultima banda dibujada: la inferior)"
                 : "  (ultima banda dibujada)");
 

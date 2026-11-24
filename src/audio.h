@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <vector>
 
@@ -20,6 +21,11 @@ public:
   void stop();
 
   bool active() const { return active_; }
+
+  // Ajusta las muestras al ritmo del dispositivo y las encola. El SID va con el reloj
+  // de la CPU y la tarjeta con el suyo: la diferencia se corrige quitando o repitiendo
+  // alguna muestra suelta, sin alterar el tempo.
+  void push_sincronizado(const std::vector<int16_t>& m, size_t objetivo);
 
   // Añade muestras mono (int16) a la cola de reproducción.
   void push(const int16_t* samples, int count);
@@ -47,17 +53,20 @@ private:
   size_t head_ = 0; // posición de lectura
   size_t tail_ = 0; // posición de escritura
   size_t size_ = 0; // capacidad
-  size_t fill_ = 0; // muestras disponibles
+  std::atomic<size_t> fill_{0}; // muestras disponibles
 
   int freq_ = 48000;
   int callback_samples_ = 0; // muestras por callback del dispositivo
   bool active_ = false;
   void* dev_ = nullptr; // SDL_AudioDeviceID
-  unsigned long underruns_ = 0;         // episodios (tramos sin datos)
-  unsigned long underrun_samples_ = 0;  // muestras de silencio acumuladas
+  // Los escribe el hilo de audio y los lee el principal.
+  std::atomic<unsigned long> underruns_{0};         // episodios (tramos sin datos)
+  std::atomic<unsigned long> underrun_samples_{0};  // muestras de silencio acumuladas
   unsigned long overdrops_ = 0;
   // Dentro de un tramo de silencio: para no contar cada muestra como episodio.
   bool underflow_active_ = false;
+  double nivel_medio_ = -1.0; // nivel del anillo, suavizado
+  int desde_ajuste_ = 0;
 
   static void sdl_callback(void* userdata, uint8_t* stream, int len);
 };

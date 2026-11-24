@@ -107,7 +107,7 @@ struct DebugServer::Conn {
 
 long long DebugServer::now_ms() {
 #ifdef _WIN32
-  return (long long)GetTickCount();
+  return (long long)GetTickCount64();
 #else
   struct timespec ts{};
   clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -139,14 +139,18 @@ bool DebugServer::start(int port, Bus& bus) {
   // No sirve un único socket IPv6 con IPV6_V6ONLY=0: Windows no mapea
   // 127.0.0.1 a ::ffff:127.0.0.1, así que seguiría sin atender IPv4.
   //
-  // Para que dos sockets compartan puerto hacen falta SO_REUSEADDR en ambos y
-  // IPV6_V6ONLY=1 en el de IPv6. Sigue sin estar expuesto a la red: solo
+  // Los dos comparten número de puerto porque el de IPv6 lleva IPV6_V6ONLY=1. Sigue sin estar expuesto a la red: solo
   // direcciones de loopback.
   int one = 1;
   auto abrir = [&](int familia) -> long long {
     long long sk = (long long)::socket(familia, SOCK_STREAM, 0);
     if (sk == kInvalid) return kInvalid;
+#ifdef _WIN32
+    // SO_REUSEADDR en Windows deja que dos procesos escuchen en el mismo puerto.
+    setsockopt((SOCKET)sk, SOL_SOCKET, SO_EXCLUSIVEADDRUSE, (const char*)&one, sizeof(one));
+#else
     setsockopt((SOCKET)sk, SOL_SOCKET, SO_REUSEADDR, (const char*)&one, sizeof(one));
+#endif
 
     int rc;
     if (familia == AF_INET6) {
@@ -178,7 +182,9 @@ bool DebugServer::start(int port, Bus& bus) {
   listen_ = abrir(AF_INET);
   listen6_ = abrir(AF_INET6);
 
-  if (listen_ == kInvalid && listen6_ == kInvalid) {
+  // Sin IPv4 no se sigue: el puerto es de otro proceso. IPv6 puede no existir.
+  if (listen_ == kInvalid) {
+    stop();
     std::fprintf(stderr, "debug: no se pudo abrir el puerto %d (ocupado?)\n", port);
     return false;
   }
@@ -283,14 +289,17 @@ bool DebugServer::step(Conn& c) {
         cuerpo_peticion_.clear();
         if (cab.compare(0, 5, "POST ") == 0) {
           size_t len = 0;
-          const size_t p = cab.find("Content-Length:");
+          // Las cabeceras HTTP no distinguen mayúsculas.
+          std::string minus = cab;
+          for (char& ch : minus)
+            if (ch >= 'A' && ch <= 'Z') ch = (char)(ch + 32);
+          const size_t p = minus.find("\r\ncontent-length:");
           if (p != std::string::npos) {
-            len = (size_t)std::strtoul(cab.c_str() + p + 15, nullptr, 10);
+            len = (size_t)std::strtoul(cab.c_str() + p + 17, nullptr, 10);
+            if (len > 16u * 1024u * 1024u) return false;
           }
           const size_t completo = end + 4 + len;
-          if (c.in.size() < completo) {
-            return c.in.size() <= (16u * 1024u * 1024u);  // tope: 16 MB
-          }
+          if (c.in.size() < completo) return true;
           cuerpo_peticion_.assign(c.in, end + 4, len);
         }
       }
@@ -719,8 +728,9 @@ void DebugServer::build_response(Conn& /*c*/, const std::string& head) {
     }
 
     // 2) Reset de la máquina y FIFO limpia (como el botón RESET).
+    diferidos_.clear(); // lo que quedara de un /run anterior ya no vale
+    bus_->reset_placa();
     cpu_->reset();
-    bus_->uart()->reset_rx();
 
     // 3) Secuencia completa, con un plazo por paso (los consume main.cpp):
     //
@@ -848,6 +858,47 @@ void DebugServer::build_response(Conn& /*c*/, const std::string& head) {
             "       programa aun no hace joy_init() y no leera el joystick" + NL;
       }
     }
+
+  } else if (path == "/btn") {
+    // Pulsadores de $C005, con la misma semántica que /joy.
+    //   /btn?press=a,b&hold=200   /btn?release=1
+    const std::string q = "&" + query;
+    auto param = [&](const std::string& clave) -> std::string {
+      const size_t p = q.find("&" + clave + "=");
+      if (p == std::string::npos) return std::string();
+      const size_t ini = p + clave.size() + 2;
+      const size_t fin = q.find('&', ini);
+      return q.substr(ini, fin == std::string::npos ? std::string::npos : fin - ini);
+    };
+    if (!param("release").empty()) {
+      soltar_botones();
+    } else {
+      uint8_t bits = 0;
+      bool valido = true;
+      std::string nombre;
+      for (char ch : param("press") + ",") {
+        if (ch != ',') { nombre.push_back(ch); continue; }
+        if (nombre == "a") bits |= Gpio::BTN_A;
+        else if (nombre == "b") bits |= Gpio::BTN_B;
+        else valido = false;
+        nombre.clear();
+      }
+      if (!valido) {
+        resp_.status = "400 Bad Request";
+        resp_.body = "uso: /btn?press=a,b[&hold=ms] o /btn?release=1" + NL;
+        return;
+      }
+      long long hold = std::atoll(param("hold").c_str());
+      if (hold < 0) hold = 0;
+      if (hold > 5000) hold = 5000;
+      pulsar_botones(bits, hold > 0 ? now_ms() + hold : 0);
+    }
+    const uint8_t b = botones_http();
+    resp_.body = "OK: pulsado:";
+    if (!(b & Gpio::BTN_A)) resp_.body += " a";
+    if (!(b & Gpio::BTN_B)) resp_.body += " b";
+    if (b == Gpio::BTN_IDLE) resp_.body += " (ninguno)";
+    resp_.body += NL;
 
   } else if (path == "/uart") {
     // Inyecta texto en el UART como si llegara de PuTTY.
@@ -1021,7 +1072,8 @@ void DebugServer::build_response(Conn& /*c*/, const std::string& head) {
         "  /state.txt       LEDs, SID, CPU, estado\n"
         "  /ram.bin?start=0&len=16384  volcado de RAM\n"
         "  /run?name=X.BIN&addr=0800  resetea, carga y ejecuta (cuerpo = binario)\n"
-        "  /joy?press=left,fire&hold=200  pulsa el joystick (release=1 suelta)\n";
+        "  /joy?press=left,fire&hold=200  pulsa el joystick (release=1 suelta)\n"
+        "  /btn?press=a,b&hold=200  pulsa BTN_A/BTN_B de $C005 (release=1 suelta)\n";
   }
 }
 

@@ -39,7 +39,14 @@ public:
   class Timer*    timer()   { return timer_; }
   class Uart*     uart()    { return uart_; }
 
-  // Línea IRQ combinada (activa en BAJO, como Board.vhd: irq_combined <= not ...)
+  // Avanza los periféricos los ciclos de CPU de la última instrucción.
+  void tick(uint32_t cpu_cycles);
+
+  // Botón de reset de la placa (S1): reinicia los periféricos que cuelgan de la
+  // señal de reset. No toca la RAM, el OAM, las paletas ni el flag de $C004.
+  void reset_placa();
+
+  // ¿Algún módulo pide IRQ? (Board.vhd: irq_combined)
   bool irq_asserted() const;
 
 private:

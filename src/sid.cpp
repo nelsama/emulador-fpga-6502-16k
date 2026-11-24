@@ -30,6 +30,7 @@ Sid::Sid() : impl_(new Impl()) {
 Sid::~Sid() { delete impl_; }
 
 void Sid::reset() {
+  poner_al_dia();
   std::memset(regs_, 0, sizeof(regs_));
   if (impl_ && impl_->sid) {
     impl_->sid->reset();
@@ -52,6 +53,8 @@ uint8_t Sid::read(uint16_t addr, bool& resp) {
   }
   resp = true;
   const uint8_t reg = (uint8_t)(addr & 0x1F);
+
+  if (reg >= 0x1B) poner_al_dia();
 
   switch (reg) {
     case 0x19: // POT_X (no conectado)
@@ -85,33 +88,31 @@ void Sid::write(uint16_t addr, uint8_t data, bool& resp) {
   const uint8_t reg = (uint8_t)(addr & 0x1F);
   if (reg > 0x18) return; // $D419-$D41F son de solo lectura
 
+  poner_al_dia();
   regs_[reg] = data;
   impl_->sid->write(reg, data);
 }
 
-int Sid::clock(int cycles, int16_t* out, int max_out) {
-  if (!out || max_out <= 0 || cycles <= 0) return 0;
-
-  // El resampler interno de reSIDfp convierte del reloj del chip (985 kHz) a
-  // la frecuencia de salida, entregando sus muestras en `out`.
-  //
-  // NOTA: reSIDfp escribe en su propio buffer interno y devuelve cuántas
-  // muestras nuevas hay. Se procesan TODOS los ciclos pedidos (si no, el reloj
-  // del SID se quedaría corto y la música se desincronizaría de la CPU).
-  const int n = impl_->sid->clock((unsigned)cycles, out);
-  const int produced = n < max_out ? n : max_out;
-  if (produced > 0) impl_->sample = out[produced - 1];
-  return produced;
+void Sid::poner_al_dia() {
+  // CPU = 27 MHz / 8 y SID = 27 MHz / 28: el SID da 2 ciclos por cada 7 de CPU.
+  if (!impl_ || !impl_->sid || pendientes_ == 0) return;
+  const uint64_t n = pendientes_ * 2 + resto_;
+  pendientes_ = 0;
+  resto_ = (uint32_t)(n % 7);
+  unsigned ciclos = (unsigned)(n / 7);
+  int16_t buf[512];
+  while (ciclos > 0) {
+    const unsigned parte = ciclos > 2048 ? 2048 : ciclos; // ~102 muestras
+    const int m = impl_->sid->clock(parte, buf);
+    muestras_.insert(muestras_.end(), buf, buf + m);
+    ciclos -= parte;
+  }
+  // Nadie recoge el audio (p. ej. en las pruebas): no crecer sin límite.
+  if (muestras_.size() > 96000) muestras_.clear();
 }
 
-double Sid::cycle_correction() {
-  // reSIDfp no produce exactamente la frecuencia de muestreo por segundo de
-  // reloj: con 964285,714 Hz y 48 kHz entrega 48053 muestras/s (un 0,11 % de
-  // más). Ese excedente llena el anillo y deja sin datos al dispositivo a
-  // ratos (underruns), lo que separa el sonido de la imagen.
-  //
-  // Se compensa generando un 0,11 % menos de ciclos de SID por bloque. El SID
-  // sigue a su reloj real (la afinación no cambia); solo se ajusta cuánto
-  // avanza para producir justo `sample_rate` muestras por segundo.
-  return 48000.0 / 48053.0;
+void Sid::sacar_audio(std::vector<int16_t>& out) {
+  poner_al_dia();
+  out.clear();
+  out.swap(muestras_);
 }

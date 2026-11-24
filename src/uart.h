@@ -42,14 +42,23 @@ public:
   // Devuelve cuántos bytes quedan sin leer del flujo observado.
   size_t tap_pending() const { return tap_.size(); }
   uint8_t tap_pop();          // saca el siguiente byte pendiente (0 si no hay)
-  void tap_clear() { tap_.clear(); term_.limpiar(); }
+  void tap_clear() {
+    tap_.clear();
+    term_.limpiar();
+    version_term_++;
+  }
 
   // Estado del terminal (80x24, CP437 + ANSI) que refleja lo transmitido.
   const TerminalState& terminal() const { return term_; }
+  // Cambia con cada modificación del terminal: permite no copiarlo en cada fotograma.
+  uint32_t version_terminal() const { return version_term_; }
   // Codificacion de la consola (CP437 o UTF-8). Afecta a como se interpreta
   // lo que el programa escribe: debe fijarse ANTES de que lleguen los bytes,
   // por eso no basta con copiar el estado ya decodificado al panel.
-  void set_utf8(bool on) { term_.set_utf8(on); }
+  void set_utf8(bool on) {
+    term_.set_utf8(on);
+    version_term_++;
+  }
   bool utf8_activo() const { return term_.utf8_activo(); }
 
   // Entrada desde el host (PuTTY). Si RX_VALID ya estaba activo, marca overrun.
@@ -68,15 +77,28 @@ public:
     rx_valid_ = false;
     rx_error_ = false;
     rx_overrun_ = false;
+    rx_in_flight_ = false;
   }
 
-  // Avanza el temporizador de recepción serial. "cycles" son ciclos de CPU
+  // Avanza transmisor y receptor. "cycles" son ciclos de CPU
   // (3.375 MHz). Sin esto, todos los bytes llegarían "ya recibidos" a la vez y
   // el monitor (que sondea cuántos quedan antes de leer) cortaría el eco.
   void tick(uint32_t cycles);
 
   // Línea IRQ (activa alta): (tx_ready & tx_irq_en) | (rx_valid & rx_irq_en)
-  bool irq() const { return irq_; }
+  bool irq() const {
+    return (tx_ready_ && tx_irq_en_) || (rx_valid_ && rx_irq_en_);
+  }
+
+  // Botón de reset de la placa.
+  void reset_placa() {
+    reset_rx();
+    tx_ready_ = true;
+    tx_pendiente_ = false;
+    tx_countdown_ = 0;
+    tx_irq_en_ = rx_irq_en_ = false;
+    baud_div_ = 58;
+  }
 
 private:
   void start_next_frame();
@@ -94,10 +116,14 @@ private:
   // Transmisor
   std::deque<uint8_t> tx_fifo_;
   bool tx_ready_ = true;
-  bool tx_irq_pending_ = false; // flanco: se acaba de completar una transmisión
+  uint32_t tx_countdown_ = 0;  // ciclos que quedan de la trama en curso
+  bool tx_pendiente_ = false;  // se escribió otro byte durante la trama
+  uint8_t tx_dato_ = 0;
+  void iniciar_tx(uint8_t v);
 
   // Flujo observado para el terminal de la ventana (ver tap_pending()).
   std::deque<uint8_t> tap_;
+  uint32_t version_term_ = 1;
   TerminalState term_;        // lo que pinta el terminal (80x24, ANSI + CP437)
   static constexpr size_t TAP_MAX = 64 * 1024;   // tope por si nadie lo vacía
   void tap_push(uint8_t v);   // alimenta el tap (lo llama write de TX)
@@ -107,7 +133,4 @@ private:
   bool     rx_irq_en_ = false;
   uint16_t baud_div_  = 58; // 115200 @ 6.75 MHz
 
-  bool irq_ = false;
-
-  void update_irq();
 };

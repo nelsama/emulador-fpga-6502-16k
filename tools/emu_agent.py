@@ -151,7 +151,7 @@ def http(debug: int, ruta: str) -> bytes:
 def main() -> int:
     p = argparse.ArgumentParser(description="Controla el emulador desde un script.")
     p.add_argument("accion", choices=[
-        "start", "stop", "status", "screenshot", "load", "run", "runfile", "joy", "state",
+        "start", "stop", "status", "screenshot", "load", "run", "runfile", "joy", "btn", "state",
         "vram", "ram"])
     p.add_argument("arg1", nargs="?", help="argumento (fichero, dirección, ...)")
     p.add_argument("arg2", nargs="?", help="segundo argumento (dirección)")
@@ -209,6 +209,17 @@ def main() -> int:
         else:
             ms = a.arg2 if a.arg2 is not None else "150"
             ruta = f"/joy?press={a.arg1}&hold={ms}"
+        print(http(a.debug, ruta).decode(errors="replace").strip())
+    elif a.accion == "btn":
+        # Pulsadores de $C005:  btn a | btn a,b 1500 | btn release
+        if not a.arg1:
+            print("Uso: btn <a|b|release>[,..] [ms]", file=sys.stderr)
+            return 2
+        if a.arg1 == "release":
+            ruta = "/btn?release=1"
+        else:
+            ms = a.arg2 if a.arg2 is not None else "150"
+            ruta = f"/btn?press={a.arg1}&hold={ms}"
         print(http(a.debug, ruta).decode(errors="replace").strip())
     elif a.accion == "runfile":
         # Compila y prueba en un paso: manda el binario y lo ejecuta por HTTP

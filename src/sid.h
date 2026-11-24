@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <vector>
 
 #include "device.h"
 
@@ -23,18 +24,22 @@ public:
   uint8_t read(uint16_t addr, bool& resp) override;
   void write(uint16_t addr, uint8_t data, bool& resp) override;
 
-  // Avanza `cycles` ciclos del reloj del SID (clk_1mhz ≈ 985248 Hz) y escribe
-  // las muestras generadas en `out`. Devuelve el número de muestras.
-  int clock(int cycles, int16_t* out, int max_out);
+  // Acumula tiempo. El chip se pone al día al acceder a un registro o al vaciar el
+  // audio, así cada escritura suena en el instante en que la hizo la CPU.
+  void tick(uint32_t cpu_cycles) { pendientes_ += cpu_cycles; }
 
-  // Factor para que reSIDfp produzca exactamente `sample_rate` muestras por
-  // segundo (ver sid.cpp). Multiplica los ciclos de SID por vuelta.
-  static double cycle_correction();
+  // Pone el SID al día y entrega las muestras generadas (48 kHz mono).
+  void sacar_audio(std::vector<int16_t>& out);
 
   // Resetea el chip.
   void reset();
 
 private:
+  void poner_al_dia();
+  uint64_t pendientes_ = 0;       // ciclos de CPU aún no aplicados al SID
+  uint32_t resto_ = 0;            // fracción de la conversión CPU -> SID
+  std::vector<int16_t> muestras_; // audio generado y no recogido
+
   struct Impl;
   Impl* impl_ = nullptr;
 

@@ -1,4 +1,5 @@
-// Tabla de ciclos por opcode del MOS 6502 (NMOS, sin penalizaciones de página).
+// Tabla de ciclos por opcode del MOS 6502 (NMOS). Las penalizaciones por
+// rama tomada y cruce de página las suma Cpu6502::step().
 // Se usa para que el emulador avance el tiempo real (SID, timer, UART) al ritmo
 // correcto: antes se asumía "4 ciclos por instrucción", lo que desincronizaba
 // por completo al reproductor de SID (nota colgada / tono fijo).

@@ -68,9 +68,20 @@ int main() {
   escribir(g, 0xC002, 0xFF);
   comprobar("no lo tocan otros registros", leer(g, 0xC004), 0x01);
 
-  // 8. El decodificador acepta $C004 y no $C005.
+  // 8. Pulsadores $C005: activos en bajo, solo lectura, bits 7-2 a 0.
+  comprobar("C005 en reposo", leer(g, 0xC005), 0x03);
+  g.set_botones((uint8_t)~Gpio::BTN_A);
+  comprobar("C005 con BTN_A", leer(g, 0xC005), 0x02);
+  g.set_botones((uint8_t)~Gpio::BTN_B);
+  comprobar("C005 con BTN_B", leer(g, 0xC005), 0x01);
+  escribir(g, 0xC005, 0xFF);
+  comprobar("C005 ignora escrituras", leer(g, 0xC005), 0x01);
+  comprobar("C005 no toca el flag", leer(g, 0xC004), 0x01);
+
+  // 9. El decodificador acepta $C004 y $C005, y no $C006.
   comprobar("decodifica $C004", (uint8_t)g.decodes(0xC004), 1);
-  comprobar("no decodifica $C005", (uint8_t)g.decodes(0xC005), 0);
+  comprobar("decodifica $C005", (uint8_t)g.decodes(0xC005), 1);
+  comprobar("no decodifica $C006", (uint8_t)g.decodes(0xC006), 0);
 
   std::printf(fallos ? "\n%d FALLO(S)\n" : "\nTodo correcto\n", fallos);
   return fallos ? 1 : 0;

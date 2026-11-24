@@ -39,7 +39,7 @@ int main() {
   // Nombre realmente largo (base de 10): el monitor solo conoce el 8.3.
   sd.agregar_archivo("MUYLARGUISIMO.BIN", std::vector<uint8_t>(100, 0x42), &err);
   comprobar("nombre largo: se resuelve al 8.3",
-            sd.resolver_nombre("MUYLARGUISIMO.BIN") == "MUYLARGU.BIN");
+            sd.resolver_nombre("MUYLARGUISIMO.BIN") == "MUYLARGU.BI");
 
   // Lo importante del arreglo: el nombre no invade el sector inicial (+12) ni
   // el tamaño (+14) de la entrada. Antes, un nombre de 12 caracteres escribía

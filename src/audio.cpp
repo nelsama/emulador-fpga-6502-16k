@@ -34,7 +34,8 @@ bool AudioOutput::start(int freq, int buffer_ms) {
   size_ = (size_t)freq * (size_t)buffer_ms / 1000 * 8; // ~8 buffers de holgura
   if (size_ < 16384) size_ = 16384;
   ring_.assign(size_, 0);
-  head_ = tail_ = fill_ = 0;
+  head_ = tail_ = 0;
+  fill_ = 0;
   underruns_ = 0;
   underrun_samples_ = 0;
   underflow_active_ = false;
@@ -165,6 +166,35 @@ void AudioOutput::stop() {
   }
 #endif
   active_ = false;
+}
+
+void AudioOutput::push_sincronizado(const std::vector<int16_t>& m, size_t objetivo) {
+  if (m.empty()) return;
+  const size_t nivel = fill_.load();
+  if (nivel == 0) {
+    // Arranque o corte: rellenar el colchón de una vez. Se repite la primera muestra
+    // (y no ceros) para no meter un escalón.
+    const std::vector<int16_t> relleno(objetivo, m[0]);
+    push(relleno.data(), (int)relleno.size());
+    nivel_medio_ = (double)objetivo;
+  } else if (nivel > objetivo * 6) {
+    nivel_medio_ = (double)objetivo;
+    return; // muy por detrás: soltar este bloque
+  }
+  // El dispositivo consume de golpe, así que el nivel oscila: se filtra (~0,5 s).
+  nivel_medio_ += ((double)nivel - nivel_medio_) * 0.002 * ((double)m.size() / 48.0);
+  desde_ajuste_ += (int)m.size();
+  const double obj = (double)objetivo;
+  if (desde_ajuste_ >= 200 && nivel_medio_ > obj * 1.25) {
+    desde_ajuste_ = 0;
+    push(m.data(), (int)m.size() - 1);
+  } else if (desde_ajuste_ >= 200 && nivel_medio_ < obj * 0.75) {
+    desde_ajuste_ = 0;
+    push(m.data(), (int)m.size());
+    push(&m.back(), 1);
+  } else {
+    push(m.data(), (int)m.size());
+  }
 }
 
 void AudioOutput::push(const int16_t* samples, int count) {
