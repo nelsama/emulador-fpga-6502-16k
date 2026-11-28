@@ -719,6 +719,30 @@ nombre de 12. Caben **15 archivos** de hasta **65535 bytes**.
 
 Detalle completo en `../fpga-6502-16k/docs/07-MANUAL-PROGRAMACION.md`.
 
+### Cómo reparte la RAM el monitor (v2.9.0)
+
+| Rango | Uso |
+|---|---|
+| `$0002-$0027` | Página cero del monitor (`$0E-$0F` = puntero de su pila de cc65) |
+| `$0020-$007F` | Página cero de los programas |
+| `$00F0-$00F7` | Parámetros de la ROM API |
+| `$0100-$01FF` | Pila del 6502 (compartida) |
+| `$0200-$065F` | Variables del monitor (tabla de MicroFS en `$0254`) |
+| `$0660-$07FF` | Pila de cc65 del monitor (crece hacia abajo desde `$07FF`) |
+| `$0800-$7FFF` | **RAM para programas** (30 KB seguidos) |
+| `$BE40-$BEFF` | Tabla de vídeo de la ROM API |
+| `$BF00-$BF8D` | Tabla de la ROM API y firma `ROMAPI` |
+
+- Hasta la v2.8.0 la pila del monitor estaba en `$3E00-$3FFF`, en medio de la
+  RAM. Los programas compilados para esa versión que guardan datos en
+  `$0660-$07FF` deben recompilarse (`vi_4mon`, `assembler_4mon` y `Chess_4mon`
+  ya lo están).
+- Los programas no deben escribir en `$0200-$07FF`: la ROM API usa esas
+  variables y esa pila mientras el programa corre.
+- Para ver la pila del monitor:
+  `curl -o pila.bin "http://localhost:8080/ram.bin?start=1632&len=416"`
+  (`$0660`, 416 bytes).
+
 ### Registros que más se usan al depurar
 
 **UART (`$C020-$C023`)**
@@ -1825,7 +1849,7 @@ docs/
   PUTTY-SETUP.md       configuración del terminal
   img/                 capturas
 
-rom/monitor.bin        ROM del monitor v2.8.0 (16 KB)
+rom/monitor.bin        ROM del monitor v2.9.0 (16 KB)
 tarjeta.img            imagen MicroFS de 16 MB
 
 run.sh / run.bat       lanzadores

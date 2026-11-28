@@ -287,7 +287,9 @@ CPU:
 - **`PC` clavado** en la misma dirección → bucle cerrado o espera. Si es un
   bucle de teclado, es normal; si no, está atascado.
 - **`SP` que baja sin volver** → desbordamiento de pila. En reposo suele rondar
-  `F5`-`FD`.
+  `F5`-`FD`. Es la pila del 6502; la de cc65 del monitor es otra: su puntero
+  está en `$0E-$0F` y ocupa `$0660-$07FF` (monitor v2.9.0). Si baja de `$0660`,
+  se ha desbordado.
 - **`ciclos`** sirve para medir cuánto tarda una rutina sin instrumentarla:
   lee antes y después y resta.
 

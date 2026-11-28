@@ -89,7 +89,7 @@ En PuTTY, al conectar:
 ```
 Tang Nano 9K - 6502 @ 3.375 MHz
 
---- Monitor 6502 v2.8.0 ---
+--- Monitor 6502 v2.9.0 ---
 H=ayuda, SD=SD Card, Q=reset
 Inicializando SD Card...
   SD OK, tipo: HD
